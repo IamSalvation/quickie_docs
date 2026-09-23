@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Quickie Docs — Lightweight browser-based document editor</title>
+    <meta name="description"
+        content="Quickie Docs is a fast, offline-capable, browser-based document editor. Write, format, import DOCX/HTML/TXT/MD, and export to DOCX or PDF." />
+    <meta name="theme-color" content="#2b7fff" />
+    <meta name="author" content="Salvation" />
+
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+    <link rel="icon" type="image/x-icon" href="assets/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Quickie Docs — Write in your browser, offline-ready" />
+    <meta property="og:description"
+        content="A fast, lightweight document editor that runs entirely in your browser. Import DOCX/HTML/TXT/MD, auto-saves locally, export as DOCX or PDF." />
+    <meta property="og:url" content="https://iamsalvation.github.io/quickie_docs/" />
+    <meta property="og:image" content="https://iamsalvation.github.io/quickie_docs/assets/og-preview.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="Quickie Docs" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Quickie Docs — Write in your browser, offline-ready" />
+    <meta name="twitter:description"
+        content="A fast, lightweight document editor that runs entirely in your browser." />
+    <meta name="twitter:image" content="https://iamsalvation.github.io/quickie_docs/assets/og-preview.png" />
+
+    <link rel="manifest" href="manifest.json" />
+    <link rel="stylesheet" href="style.css" />
+
+    <!-- Apply saved theme as early as possible to avoid flash -->
+    <script>
+        (function () {
+            try {
+                const saved = localStorage.getItem('quickie-theme');
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                const theme = saved || (prefersDark ? 'dark' : 'light');
+                document.documentElement.setAttribute('data-theme', theme);
+            } catch (_) { }
+        })();
+    </script>
+</head>
+
+<body>
+
+    <!-- ================= LIST VIEW ================= -->
+    <div id="list-view" class="view">
+        <header class="list-header">
+            <h1>
+                <img src="assets/logo.png" alt="Quickie Docs" class="brand-logo" />
+                Quickie Docs
+            </h1>
+            <div class="list-actions">
+                <button id="install-btn" class="ghost-btn hidden" title="Install Quickie Docs as an app">📲
+                    Install</button>
+                <button id="import-btn" class="ghost-btn">📂 Import</button>
+                <button id="new-doc-btn" class="primary-btn">+ New Document</button>
+            </div>
+        </header>
+
+        <div class="search-bar">
+            <input id="search-input" type="search" placeholder="🔎 Search documents…" autocomplete="off" />
+            <button id="search-clear" class="search-clear hidden" title="Clear">✕</button>
+        </div>
+
+        <ul id="doc-list" class="doc-list"></ul>
+        <p id="empty-msg" class="empty-msg">No documents yet. Click “+ New Document” to start, or import a file.</p>
+        <p id="no-results-msg" class="empty-msg hidden">No documents match your search.</p>
+    </div>
+
+    <!-- ================= EDITOR VIEW ================= -->
+    <div id="editor-view" class="view hidden">
+
+        <div id="ribbon" class="ribbon">
+
+            <nav class="ribbon-tabs">
+                <button class="tab" data-tab="file">File</button>
+                <button class="tab active" data-tab="home">Home</button>
+                <button class="tab" data-tab="insert">Insert</button>
+                <button class="tab" data-tab="review">Review</button>
+                <button class="tab" data-tab="view">View</button>
+
+                <div class="ribbon-spacer"></div>
+
+                <button id="palette-btn" class="ribbon-search" title="Search commands">
+                    <span>🔍</span>
+                    <span class="ribbon-search-text">Tell me what you want to do</span>
+                </button>
+            </nav>
+
+            <!-- ---------- File ---------- -->
+            <div class="ribbon-panel" data-panel="file">
+                <div class="file-menu-row">
+                    <button class="file-pill" data-file="new">
+                        <span class="pill-icon">📄</span><span class="pill-label">New</span>
+                    </button>
+                    <button class="file-pill" data-file="save">
+                        <span class="pill-icon">💾</span><span class="pill-label">Save</span>
+                    </button>
+                    <button class="file-pill" data-file="import">
+                        <span class="pill-icon">📂</span><span class="pill-label">Import</span>
+                    </button>
+                    <button class="file-pill" data-file="download-docx">
+                        <span class="pill-icon">⬇</span><span class="pill-label">Download DOCX</span>
+                    </button>
+                    <button class="file-pill" data-file="download-html">
+                        <span class="pill-icon">⬇</span><span class="pill-label">Export HTML (backup)</span>
+                    </button>
+                    <button class="file-pill" data-file="print">
+                        <span class="pill-icon">🖨</span><span class="pill-label">Print / PDF</span>
+                    </button>
+                    <button class="file-pill" data-file="back">
+                        <span class="pill-icon">←</span><span class="pill-label">Back</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ---------- Home ---------- -->
+            <div class="ribbon-panel active" data-panel="home">
+
+                <div class="group" data-group="history" data-icon="↶">
+                    <div class="group-items">
+                        <button class="ribbon-btn" data-cmd="undo" title="Undo"><span
+                                class="icon">↶</span><span>Undo</span></button>
+                        <button class="ribbon-btn" data-cmd="redo" title="Redo"><span
+                                class="icon">↷</span><span>Redo</span></button>
+                    </div>
+                    <div class="group-label">History</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">↶</span>
+                        <span class="collapsed-label">History</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-cmd="undo">↶ Undo</li>
+                        <li data-target-cmd="redo">↷ Redo</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="font" data-icon="🅰">
+                    <div class="group-items">
+                        <select id="font-family" class="ribbon-select" title="Font family">
+                            <option value="default">Default</option>
+                            <optgroup label="Sans-serif">
+                                <option value="Arial, sans-serif">Arial</option>
+                                <option value="Helvetica, sans-serif">Helvetica</option>
+                                <option value="Verdana, sans-serif">Verdana</option>
+                                <option value="Tahoma, sans-serif">Tahoma</option>
+                                <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+                                <option value="'Segoe UI', sans-serif">Segoe UI</option>
+                                <option value="Calibri, sans-serif">Calibri</option>
+                                <option value="Candara, sans-serif">Candara</option>
+                                <option value="Optima, sans-serif">Optima</option>
+                                <option value="Futura, sans-serif">Futura</option>
+                                <option value="'Comic Sans MS', cursive">Comic Sans MS</option>
+                                <option value="Impact, sans-serif">Impact</option>
+                            </optgroup>
+                            <optgroup label="Serif">
+                                <option value="Georgia, serif">Georgia</option>
+                                <option value="'Times New Roman', serif">Times New Roman</option>
+                                <option value="Garamond, serif">Garamond</option>
+                                <option value="Palatino, serif">Palatino</option>
+                                <option value="Cambria, serif">Cambria</option>
+                                <option value="Constantia, serif">Constantia</option>
+                                <option value="'Book Antiqua', serif">Book Antiqua</option>
+                                <option value="'Brush Script MT', cursive">Brush Script MT</option>
+                            </optgroup>
+                            <optgroup label="Monospace">
+                                <option value="'Courier New', monospace">Courier New</option>
+                                <option value="Consolas, monospace">Consolas</option>
+                                <option value="Monaco, monospace">Monaco</option>
+                            </optgroup>
+                        </select>
+                        <select id="font-size" class="ribbon-select small" title="Font size">
+                            <option value="8">8</option>
+                            <option value="9">9</option>
+                            <option value="10">10</option>
+                            <option value="11">11</option>
+                            <option value="12">12</option>
+                            <option value="14">14</option>
+                            <option value="16" selected>16</option>
+                            <option value="18">18</option>
+                            <option value="20">20</option>
+                            <option value="24">24</option>
+                            <option value="28">28</option>
+                            <option value="32">32</option>
+                            <option value="36">36</option>
+                            <option value="48">48</option>
+                            <option value="60">60</option>
+                            <option value="72">72</option>
+                            <option value="96">96</option>
+                        </select>
+                        <span class="mini-sep"></span>
+                        <button class="ribbon-btn small" data-cmd="bold" title="Bold"><b>B</b></button>
+                        <button class="ribbon-btn small" data-cmd="italic" title="Italic"><i>I</i></button>
+                        <button class="ribbon-btn small" data-cmd="underline" title="Underline"><u>U</u></button>
+                        <button class="ribbon-btn small" data-cmd="strikeThrough"
+                            title="Strikethrough"><s>S</s></button>
+                        <button class="ribbon-btn small" data-cmd="superscript" title="Superscript">x²</button>
+                        <button class="ribbon-btn small" data-cmd="subscript" title="Subscript">x₂</button>
+                        <span class="mini-sep"></span>
+
+                        <div class="color-picker" data-color-target="foreColor">
+                            <button class="ribbon-btn small color-main" id="color-text-trigger"
+                                title="Apply text color">
+                                <span class="color-letter" style="border-bottom-color:#1f2328">A</span>
+                            </button>
+                            <button class="color-caret" title="Choose text color">▾</button>
+                            <div class="color-menu hidden">
+                                <div class="color-grid" data-swatches="text"></div>
+                                <button class="color-custom">Custom…</button>
+                                <input type="color" value="#1f2328" hidden />
+                            </div>
+                        </div>
+
+                        <div class="color-picker" data-color-target="hiliteColor">
+                            <button class="ribbon-btn small color-main" id="color-highlight-trigger"
+                                title="Apply highlight">
+                                <span class="color-letter" style="border-bottom-color:#ffff00">🖍</span>
+                            </button>
+                            <button class="color-caret" title="Choose highlight color">▾</button>
+                            <div class="color-menu hidden">
+                                <div class="color-grid" data-swatches="highlight"></div>
+                                <button class="color-custom">Custom…</button>
+                                <input type="color" value="#ffff00" hidden />
+                            </div>
+                        </div>
+
+                        <button class="ribbon-btn small" id="clear-format" title="Clear formatting">✕</button>
+                    </div>
+                    <div class="group-label">Font</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">🅰</span>
+                        <span class="collapsed-label">Font</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-cmd="bold">B — Bold</li>
+                        <li data-target-cmd="italic">I — Italic</li>
+                        <li data-target-cmd="underline">U — Underline</li>
+                        <li data-target-cmd="strikeThrough">S — Strikethrough</li>
+                        <li data-target-cmd="superscript">x² — Superscript</li>
+                        <li data-target-cmd="subscript">x₂ — Subscript</li>
+                        <li data-target-id="color-text-trigger">A — Text color</li>
+                        <li data-target-id="color-highlight-trigger">🖍 — Highlight</li>
+                        <li data-target-id="clear-format">✕ Clear formatting</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="paragraph" data-icon="¶">
+                    <div class="group-items">
+                        <button class="ribbon-btn small" data-cmd="insertUnorderedList" title="Bullet list">•</button>
+                        <button class="ribbon-btn small" data-cmd="insertOrderedList" title="Numbered list">1.</button>
+                        <button class="ribbon-btn small" data-cmd="outdent" title="Decrease indent">⇤</button>
+                        <button class="ribbon-btn small" data-cmd="indent" title="Increase indent">⇥</button>
+                        <span class="mini-sep"></span>
+                        <button class="ribbon-btn small" data-cmd="justifyLeft" title="Align left">⬅</button>
+                        <button class="ribbon-btn small" data-cmd="justifyCenter" title="Align center">↔</button>
+                        <button class="ribbon-btn small" data-cmd="justifyRight" title="Align right">➡</button>
+                        <button class="ribbon-btn small" data-cmd="justifyFull" title="Justify">☰</button>
+                        <span class="mini-sep"></span>
+                        <select id="line-height" class="ribbon-select small" title="Line height">
+                            <option value="1">1.0</option>
+                            <option value="1.15">1.15</option>
+                            <option value="1.5" selected>1.5</option>
+                            <option value="2">2.0</option>
+                            <option value="2.5">2.5</option>
+                        </select>
+                    </div>
+                    <div class="group-label">Paragraph</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">¶</span>
+                        <span class="collapsed-label">Paragraph</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-cmd="insertUnorderedList">• Bullet list</li>
+                        <li data-target-cmd="insertOrderedList">1. Numbered list</li>
+                        <li data-target-cmd="outdent">⇤ Outdent</li>
+                        <li data-target-cmd="indent">⇥ Indent</li>
+                        <li data-target-cmd="justifyLeft">⬅ Align left</li>
+                        <li data-target-cmd="justifyCenter">↔ Align center</li>
+                        <li data-target-cmd="justifyRight">➡ Align right</li>
+                        <li data-target-cmd="justifyFull">☰ Justify</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="styles" data-icon="H1">
+                    <div class="group-items">
+                        <button class="ribbon-btn" data-cmd="formatBlock" data-value="H1" title="Heading 1"><span
+                                class="icon">H1</span><span>Heading 1</span></button>
+                        <button class="ribbon-btn" data-cmd="formatBlock" data-value="H2" title="Heading 2"><span
+                                class="icon">H2</span><span>Heading 2</span></button>
+                        <button class="ribbon-btn" data-cmd="formatBlock" data-value="H3" title="Heading 3"><span
+                                class="icon">H3</span><span>Heading 3</span></button>
+                        <button class="ribbon-btn" data-cmd="formatBlock" data-value="P" title="Normal"><span
+                                class="icon">¶</span><span>Normal</span></button>
+                        <button class="ribbon-btn" data-cmd="formatBlock" data-value="BLOCKQUOTE" title="Quote"><span
+                                class="icon">❝</span><span>Quote</span></button>
+                        <button class="ribbon-btn" data-cmd="formatBlock" data-value="PRE" title="Code"><span
+                                class="icon">{ }</span><span>Code</span></button>
+                    </div>
+                    <div class="group-label">Styles</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">H1</span>
+                        <span class="collapsed-label">Styles</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-cmd="formatBlock" data-target-value="H1">H1 — Heading 1</li>
+                        <li data-target-cmd="formatBlock" data-target-value="H2">H2 — Heading 2</li>
+                        <li data-target-cmd="formatBlock" data-target-value="H3">H3 — Heading 3</li>
+                        <li data-target-cmd="formatBlock" data-target-value="P">¶ — Normal</li>
+                        <li data-target-cmd="formatBlock" data-target-value="BLOCKQUOTE">❝ — Quote</li>
+                        <li data-target-cmd="formatBlock" data-target-value="PRE">{ } — Code</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="editing" data-icon="🔍">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="find-btn" title="Find"><span
+                                class="icon">🔍</span><span>Find</span></button>
+                        <button class="ribbon-btn" id="wordcount-btn" title="Word count"><span
+                                class="icon">#</span><span>Count</span></button>
+                    </div>
+                    <div class="group-label">Editing</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">🔍</span>
+                        <span class="collapsed-label">Editing</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="find-btn">🔍 Find</li>
+                        <li data-target-id="wordcount-btn"># Word count</li>
+                    </ul>
+                </div>
+
+            </div>
+
+            <!-- ---------- Insert ---------- -->
+            <div class="ribbon-panel" data-panel="insert">
+
+                <div class="group" data-group="pages" data-icon="⎯">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="insert-pagebreak" title="Page break"><span
+                                class="icon">⎯</span><span>Page Break</span></button>
+                    </div>
+                    <div class="group-label">Pages</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">⎯</span>
+                        <span class="collapsed-label">Pages</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="insert-pagebreak">⎯ Page Break</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="tables" data-icon="▦">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="insert-table" title="Insert table"><span
+                                class="icon">▦</span><span>Table</span></button>
+                    </div>
+                    <div class="group-label">Tables</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">▦</span>
+                        <span class="collapsed-label">Tables</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="insert-table">▦ Insert table</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="illustrations" data-icon="🖼">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="insert-image" title="Insert image"><span
+                                class="icon">🖼</span><span>Picture</span></button>
+                        <button class="ribbon-btn" id="insert-shape" title="Insert shape"><span
+                                class="icon">▭</span><span>Shape</span></button>
+                    </div>
+                    <div class="group-label">Illustrations</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">🖼</span>
+                        <span class="collapsed-label">Illustrations</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="insert-image">🖼 Picture</li>
+                        <li data-target-id="insert-shape">▭ Shape</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="links" data-icon="🔗">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="insert-link" title="Insert link"><span
+                                class="icon">🔗</span><span>Link</span></button>
+                    </div>
+                    <div class="group-label">Links</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">🔗</span>
+                        <span class="collapsed-label">Links</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="insert-link">🔗 Insert link</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="symbols" data-icon="Ω">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="insert-emoji" title="Insert emoji"><span
+                                class="icon">😀</span><span>Emoji</span></button>
+                        <button class="ribbon-btn" id="insert-symbol" title="Insert symbol"><span
+                                class="icon">Ω</span><span>Symbol</span></button>
+                    </div>
+                    <div class="group-label">Symbols</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">Ω</span>
+                        <span class="collapsed-label">Symbols</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="insert-emoji">😀 Emoji</li>
+                        <li data-target-id="insert-symbol">Ω Symbol</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="text" data-icon="📅">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="insert-date" title="Insert date"><span
+                                class="icon">📅</span><span>Date</span></button>
+                        <button class="ribbon-btn" id="insert-hr" title="Horizontal rule"><span
+                                class="icon">―</span><span>Divider</span></button>
+                    </div>
+                    <div class="group-label">Text</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">📅</span>
+                        <span class="collapsed-label">Text</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="insert-date">📅 Date</li>
+                        <li data-target-id="insert-hr">― Divider</li>
+                    </ul>
+                </div>
+
+            </div>
+
+            <!-- ---------- Review ---------- -->
+            <div class="ribbon-panel" data-panel="review">
+
+                <div class="group" data-group="proofing" data-icon="✔">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="spellcheck-btn" title="Spell check"><span
+                                class="icon">✔</span><span>Spell Check</span></button>
+                        <button class="ribbon-btn" id="thesaurus-btn" title="Thesaurus"><span
+                                class="icon">📖</span><span>Thesaurus</span></button>
+                    </div>
+                    <div class="group-label">Proofing</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">✔</span>
+                        <span class="collapsed-label">Proofing</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="spellcheck-btn">✔ Spell check</li>
+                        <li data-target-id="thesaurus-btn">📖 Thesaurus</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="comments" data-icon="💬">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="comment-btn" title="Add comment"><span
+                                class="icon">💬</span><span>Comment</span></button>
+                    </div>
+                    <div class="group-label">Comments</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">💬</span>
+                        <span class="collapsed-label">Comments</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="comment-btn">💬 Comment</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="statistics" data-icon="#">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="wordcount-btn-2" title="Word count"><span
+                                class="icon">#</span><span>Word Count</span></button>
+                    </div>
+                    <div class="group-label">Statistics</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">#</span>
+                        <span class="collapsed-label">Statistics</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="wordcount-btn-2"># Word count</li>
+                    </ul>
+                </div>
+
+            </div>
+
+            <!-- ---------- View ---------- -->
+            <div class="ribbon-panel" data-panel="view">
+
+                <div class="group" data-group="theme" data-icon="🌙">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="theme-toggle" title="Toggle theme">
+                            <span class="icon" id="theme-icon">🌙</span>
+                            <span id="theme-label">Dark</span>
+                        </button>
+                    </div>
+                    <div class="group-label">Theme</div>
+                </div>
+
+                <div class="group" data-group="views" data-icon="👁">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="preview-btn" title="Preview"><span
+                                class="icon">👁</span><span>Preview</span></button>
+                        <button class="ribbon-btn" id="compact-toggle" title="Toggle compact toolbar"><span
+                                class="icon">⇕</span><span>Compact</span></button>
+                    </div>
+                    <div class="group-label">Views</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">👁</span>
+                        <span class="collapsed-label">Views</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="preview-btn">👁 Preview</li>
+                        <li data-target-id="compact-toggle">⇕ Compact toolbar</li>
+                    </ul>
+                </div>
+
+                <div class="group" data-group="window" data-icon="⛶">
+                    <div class="group-items">
+                        <button class="ribbon-btn" id="fullscreen-btn" title="Fullscreen"><span
+                                class="icon">⛶</span><span>Fullscreen</span></button>
+                        <button class="ribbon-btn" id="print-btn" title="Print"><span
+                                class="icon">🖨</span><span>Print</span></button>
+                    </div>
+                    <div class="group-label">Window</div>
+                    <button class="group-collapsed-btn">
+                        <span class="collapsed-icon">⛶</span>
+                        <span class="collapsed-label">Window</span>
+                        <span class="chev">▾</span>
+                    </button>
+                    <ul class="group-dropdown">
+                        <li data-target-id="fullscreen-btn">⛶ Fullscreen</li>
+                        <li data-target-id="print-btn">🖨 Print</li>
+                    </ul>
+                </div>
+
+            </div>
+
+        </div>
+        <!-- =============== END RIBBON =============== -->
+
+        <!-- =============== COMPACT TOOLBAR =============== -->
+        <div id="compact-toolbar" class="toolbar hidden">
+            <button data-cmd="undo" title="Undo">↶</button>
+            <button data-cmd="redo" title="Redo">↷</button>
+            <span class="sep"></span>
+            <select id="font-family-compact" class="toolbar-select">
+                <option value="default">Default</option>
+                <option value="Arial, sans-serif">Arial</option>
+                <option value="'Segoe UI', sans-serif">Segoe UI</option>
+                <option value="Georgia, serif">Georgia</option>
+                <option value="'Times New Roman', serif">Times New Roman</option>
+                <option value="'Courier New', monospace">Courier New</option>
+            </select>
+            <select id="font-size-compact" class="toolbar-select">
+                <option value="10">10</option>
+                <option value="12">12</option>
+                <option value="14">14</option>
+                <option value="16" selected>16</option>
+                <option value="18">18</option>
+                <option value="24">24</option>
+                <option value="32">32</option>
+            </select>
+            <span class="sep"></span>
+            <button data-cmd="bold"><b>B</b></button>
+            <button data-cmd="italic"><i>I</i></button>
+            <button data-cmd="underline"><u>U</u></button>
+            <button data-cmd="strikeThrough"><s>S</s></button>
+            <span class="sep"></span>
+            <button data-cmd="formatBlock" data-value="H1">H1</button>
+            <button data-cmd="formatBlock" data-value="H2">H2</button>
+            <button data-cmd="formatBlock" data-value="P">¶</button>
+            <span class="sep"></span>
+            <button data-cmd="insertUnorderedList">• List</button>
+            <button data-cmd="insertOrderedList">1. List</button>
+            <span class="sep"></span>
+            <button data-cmd="justifyLeft">⬅</button>
+            <button data-cmd="justifyCenter">↔</button>
+            <button data-cmd="justifyRight">➡</button>
+        </div>
+
+        <!-- =============== EDITOR HEADER =============== -->
+        <header class="editor-header">
+            <button id="back-btn" class="ghost-btn">← Back</button>
+            <input id="doc-title" class="doc-title" type="text" value="Untitled" />
+            <div class="editor-actions">
+                <span id="save-status" class="save-status"></span>
+                <button id="download-btn" class="ghost-btn">⬇ Download</button>
+            </div>
+        </header>
+
+        <div id="editor" class="editor" contenteditable="true" spellcheck="true"></div>
+
+        <div id="find-bar" class="find-bar hidden">
+            <input id="find-input" type="text" placeholder="Find in document…" />
+            <span id="find-count"></span>
+            <button id="find-close" title="Close">✕</button>
+        </div>
+
+        <div id="wordcount-popup" class="wordcount-popup hidden"></div>
+
+        <div id="palette-overlay" class="palette-overlay hidden">
+            <div class="palette">
+                <input id="palette-input" type="text" placeholder="Type a command… (e.g. bold, table, print)"
+                    autocomplete="off" />
+                <ul id="palette-list" class="palette-list"></ul>
+            </div>
+        </div>
+
+        <!-- Table context menu -->
+        <div id="table-menu" class="context-menu hidden">
+            <button data-table-action="row-above">⬆ Insert row above</button>
+            <button data-table-action="row-below">⬇ Insert row below</button>
+            <button data-table-action="col-left">⬅ Insert column left</button>
+            <button data-table-action="col-right">➡ Insert column right</button>
+            <div class="context-sep"></div>
+            <button data-table-action="row-delete" class="danger">🗑 Delete row</button>
+            <button data-table-action="col-delete" class="danger">🗑 Delete column</button>
+            <div class="context-sep"></div>
+            <button data-table-action="table-delete" class="danger">🗑 Delete table</button>
+        </div>
+
+    </div>
+
+    <!-- Toast notification -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/html-docx-js/dist/html-docx.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mammoth@1.7.0/mammoth.browser.min.js"></script>
+    <script src="app.js"></script>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(reg => console.log('[PWA] Service worker registered:', reg.scope))
+                    .catch(err => console.warn('[PWA] Service worker registration failed:', err));
+            });
+        }
+    </script>
+</body>
+
+</html>

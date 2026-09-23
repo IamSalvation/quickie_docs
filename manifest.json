@@ -1,0 +1,63 @@
+{
+    "name": "Quickie Docs",
+    "short_name": "Quickie Docs",
+    "description": "A fast, lightweight, offline-capable document editor that runs entirely in your browser. Import DOCX/HTML/TXT/MD, export as DOCX or PDF.",
+    "start_url": "./index.html",
+    "scope": "./",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#f5f6f8",
+    "theme_color": "#2b7fff",
+    "categories": [
+        "productivity",
+        "utilities"
+    ],
+    "lang": "en",
+    "dir": "ltr",
+    "icons": [
+        {
+            "src": "assets/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "assets/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "assets/icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ],
+    "shortcuts": [
+        {
+            "name": "New Document",
+            "short_name": "New",
+            "description": "Start a fresh document",
+            "url": "./index.html?action=new",
+            "icons": [
+                {
+                    "src": "assets/icon-192.png",
+                    "sizes": "192x192"
+                }
+            ]
+        },
+        {
+            "name": "Import a file",
+            "short_name": "Import",
+            "description": "Import a DOCX, HTML, TXT, or MD file",
+            "url": "./index.html?action=import",
+            "icons": [
+                {
+                    "src": "assets/icon-192.png",
+                    "sizes": "192x192"
+                }
+            ]
+        }
+    ]
+}
