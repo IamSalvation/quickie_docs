@@ -34,7 +34,6 @@
     <link rel="manifest" href="manifest.json" />
     <link rel="stylesheet" href="style.css" />
 
-    <!-- Apply saved theme as early as possible to avoid flash -->
     <script>
         (function () {
             try {
@@ -88,7 +87,7 @@
 
                 <div class="ribbon-spacer"></div>
 
-                <button id="palette-btn" class="ribbon-search" title="Search commands">
+                <button id="palette-btn" class="ribbon-search" title="Search commands (Ctrl+Shift+P)">
                     <span>🔍</span>
                     <span class="ribbon-search-text">Tell me what you want to do</span>
                 </button>
@@ -103,14 +102,11 @@
                     <button class="file-pill" data-file="save">
                         <span class="pill-icon">💾</span><span class="pill-label">Save</span>
                     </button>
+                    <button class="file-pill" data-file="save-as">
+                        <span class="pill-icon">⬇</span><span class="pill-label">Save As…</span>
+                    </button>
                     <button class="file-pill" data-file="import">
                         <span class="pill-icon">📂</span><span class="pill-label">Import</span>
-                    </button>
-                    <button class="file-pill" data-file="download-docx">
-                        <span class="pill-icon">⬇</span><span class="pill-label">Download DOCX</span>
-                    </button>
-                    <button class="file-pill" data-file="download-html">
-                        <span class="pill-icon">⬇</span><span class="pill-label">Export HTML (backup)</span>
                     </button>
                     <button class="file-pill" data-file="print">
                         <span class="pill-icon">🖨</span><span class="pill-label">Print / PDF</span>
@@ -126,9 +122,9 @@
 
                 <div class="group" data-group="history" data-icon="↶">
                     <div class="group-items">
-                        <button class="ribbon-btn" data-cmd="undo" title="Undo"><span
+                        <button class="ribbon-btn" data-cmd="undo" title="Undo (Ctrl+Z)"><span
                                 class="icon">↶</span><span>Undo</span></button>
-                        <button class="ribbon-btn" data-cmd="redo" title="Redo"><span
+                        <button class="ribbon-btn" data-cmd="redo" title="Redo (Ctrl+Y)"><span
                                 class="icon">↷</span><span>Redo</span></button>
                     </div>
                     <div class="group-label">History</div>
@@ -197,9 +193,10 @@
                             <option value="96">96</option>
                         </select>
                         <span class="mini-sep"></span>
-                        <button class="ribbon-btn small" data-cmd="bold" title="Bold"><b>B</b></button>
-                        <button class="ribbon-btn small" data-cmd="italic" title="Italic"><i>I</i></button>
-                        <button class="ribbon-btn small" data-cmd="underline" title="Underline"><u>U</u></button>
+                        <button class="ribbon-btn small" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+                        <button class="ribbon-btn small" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+                        <button class="ribbon-btn small" data-cmd="underline"
+                            title="Underline (Ctrl+U)"><u>U</u></button>
                         <button class="ribbon-btn small" data-cmd="strikeThrough"
                             title="Strikethrough"><s>S</s></button>
                         <button class="ribbon-btn small" data-cmd="superscript" title="Superscript">x²</button>
@@ -324,7 +321,7 @@
 
                 <div class="group" data-group="editing" data-icon="🔍">
                     <div class="group-items">
-                        <button class="ribbon-btn" id="find-btn" title="Find"><span
+                        <button class="ribbon-btn" id="find-btn" title="Find (Ctrl+F)"><span
                                 class="icon">🔍</span><span>Find</span></button>
                         <button class="ribbon-btn" id="wordcount-btn" title="Word count"><span
                                 class="icon">#</span><span>Count</span></button>
@@ -399,7 +396,7 @@
 
                 <div class="group" data-group="links" data-icon="🔗">
                     <div class="group-items">
-                        <button class="ribbon-btn" id="insert-link" title="Insert link"><span
+                        <button class="ribbon-btn" id="insert-link" title="Insert link (Ctrl+K)"><span
                                 class="icon">🔗</span><span>Link</span></button>
                     </div>
                     <div class="group-label">Links</div>
@@ -514,7 +511,7 @@
 
                 <div class="group" data-group="theme" data-icon="🌙">
                     <div class="group-items">
-                        <button class="ribbon-btn" id="theme-toggle" title="Toggle theme">
+                        <button class="ribbon-btn" id="theme-toggle" title="Toggle theme (Ctrl+Shift+D)">
                             <span class="icon" id="theme-icon">🌙</span>
                             <span id="theme-label">Dark</span>
                         </button>
@@ -545,7 +542,7 @@
                     <div class="group-items">
                         <button class="ribbon-btn" id="fullscreen-btn" title="Fullscreen"><span
                                 class="icon">⛶</span><span>Fullscreen</span></button>
-                        <button class="ribbon-btn" id="print-btn" title="Print"><span
+                        <button class="ribbon-btn" id="print-btn" title="Print (Ctrl+P)"><span
                                 class="icon">🖨</span><span>Print</span></button>
                     </div>
                     <div class="group-label">Window</div>
@@ -565,7 +562,6 @@
         </div>
         <!-- =============== END RIBBON =============== -->
 
-        <!-- =============== COMPACT TOOLBAR =============== -->
         <div id="compact-toolbar" class="toolbar hidden">
             <button data-cmd="undo" title="Undo">↶</button>
             <button data-cmd="redo" title="Redo">↷</button>
@@ -605,13 +601,12 @@
             <button data-cmd="justifyRight">➡</button>
         </div>
 
-        <!-- =============== EDITOR HEADER =============== -->
         <header class="editor-header">
             <button id="back-btn" class="ghost-btn">← Back</button>
             <input id="doc-title" class="doc-title" type="text" value="Untitled" />
             <div class="editor-actions">
                 <span id="save-status" class="save-status"></span>
-                <button id="download-btn" class="ghost-btn">⬇ Download</button>
+                <button id="save-as-btn" class="ghost-btn" title="Save As… (Ctrl+Shift+S)">⬇ Save As</button>
             </div>
         </header>
 
@@ -633,7 +628,6 @@
             </div>
         </div>
 
-        <!-- Table context menu -->
         <div id="table-menu" class="context-menu hidden">
             <button data-table-action="row-above">⬆ Insert row above</button>
             <button data-table-action="row-below">⬇ Insert row below</button>
@@ -648,10 +642,39 @@
 
     </div>
 
-    <!-- Toast notification -->
+    <!-- ============ SAVE AS MODAL ============ -->
+    <div id="save-as-modal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Save As</h2>
+                <button id="save-as-close" class="modal-close" title="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <label class="modal-label">
+                    <span>File name</span>
+                    <input id="save-as-name" type="text" placeholder="Untitled" />
+                </label>
+                <label class="modal-label">
+                    <span>Save as type</span>
+                    <select id="save-as-type">
+                        <option value="docx" selected>Word Document (.docx)</option>
+                        <option value="html">Web Page (.html)</option>
+                        <option value="txt">Plain Text (.txt)</option>
+                        <option value="md">Markdown (.md)</option>
+                    </select>
+                </label>
+                <p id="save-as-hint" class="modal-hint"></p>
+            </div>
+            <div class="modal-footer">
+                <button id="save-as-cancel" class="ghost-btn">Cancel</button>
+                <button id="save-as-confirm" class="primary-btn">Save</button>
+            </div>
+        </div>
+    </div>
+
     <div id="toast" class="toast hidden"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/html-docx-js/dist/html-docx.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mammoth@1.7.0/mammoth.browser.min.js"></script>
     <script src="app.js"></script>
 

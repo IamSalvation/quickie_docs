@@ -1,6 +1,6 @@
 /* =========================================================
-   Quickie Docs — Phase 3
-   Dark mode · Image compression · Better tables · Cross-doc search
+   Quickie Docs — v1.3.0
+   Custom DOCX writer + Save As + fixed keyboard shortcuts
    ========================================================= */
 
 // ---------- IndexedDB ----------
@@ -65,7 +65,7 @@ const installBtn = document.getElementById('install-btn');
 const backBtn = document.getElementById('back-btn');
 const titleInput = document.getElementById('doc-title');
 const editorEl = document.getElementById('editor');
-const downloadBtn = document.getElementById('download-btn');
+const saveAsBtn = document.getElementById('save-as-btn');
 const saveStatus = document.getElementById('save-status');
 const ribbon = document.getElementById('ribbon');
 const compactTB = document.getElementById('compact-toolbar');
@@ -75,6 +75,15 @@ const themeToggle = document.getElementById('theme-toggle');
 const themeIcon = document.getElementById('theme-icon');
 const themeLabel = document.getElementById('theme-label');
 
+// Save As modal
+const saveAsModal = document.getElementById('save-as-modal');
+const saveAsName = document.getElementById('save-as-name');
+const saveAsType = document.getElementById('save-as-type');
+const saveAsHint = document.getElementById('save-as-hint');
+const saveAsClose = document.getElementById('save-as-close');
+const saveAsCancel = document.getElementById('save-as-cancel');
+const saveAsConfirm = document.getElementById('save-as-confirm');
+
 // ---------- State ----------
 let currentDoc = null;
 let saveTimer = null;
@@ -83,6 +92,7 @@ let previewMode = false;
 let toastTimer = null;
 let currentSearch = '';
 let tableMenuTargetCell = null;
+const fileHandles = {};   // docId -> FileSystemFileHandle
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 function formatDate(ts) {
@@ -95,13 +105,12 @@ function flashStatus(text) {
 }
 
 /* =========================================================
-   THEME (dark mode)
+   THEME
    ========================================================= */
 function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
     if (themeIcon) themeIcon.textContent = theme === 'dark' ? '☀️' : '🌙';
     if (themeLabel) themeLabel.textContent = theme === 'dark' ? 'Light' : 'Dark';
-    // Update theme-color meta for the browser UI
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', theme === 'dark' ? '#1a2027' : '#2b7fff');
 }
@@ -113,14 +122,12 @@ function toggleTheme() {
 }
 themeToggle?.addEventListener('click', toggleTheme);
 
-// Follow system preference changes if user hasn't manually chosen
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
     if (!localStorage.getItem('quickie-theme')) {
         applyTheme(e.matches ? 'dark' : 'light');
     }
 });
 
-// Initial sync
 (function initTheme() {
     const saved = localStorage.getItem('quickie-theme');
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -145,25 +152,21 @@ function hideToast() {
 }
 
 /* =========================================================
-   PWA — Install prompt
+   PWA INSTALL
    ========================================================= */
 let deferredInstallPrompt = null;
-
 window.addEventListener('beforeinstallprompt', e => {
     e.preventDefault();
     deferredInstallPrompt = e;
     installBtn?.classList.remove('hidden');
 });
-
 installBtn?.addEventListener('click', async () => {
     if (!deferredInstallPrompt) return;
     deferredInstallPrompt.prompt();
-    const { outcome } = await deferredInstallPrompt.userChoice;
-    console.log('[PWA] Install outcome:', outcome);
+    await deferredInstallPrompt.userChoice;
     deferredInstallPrompt = null;
     installBtn.classList.add('hidden');
 });
-
 window.addEventListener('appinstalled', () => {
     installBtn?.classList.add('hidden');
 });
@@ -254,7 +257,6 @@ async function renderList() {
         : docs;
 
     docList.innerHTML = '';
-
     if (docs.length === 0) {
         emptyMsg.style.display = 'block';
         noResultsMsg.style.display = 'none';
@@ -300,7 +302,6 @@ async function renderList() {
 
         info.appendChild(name);
 
-        // Show a snippet if searching and there's a content match
         if (q) {
             const preview = stripHTML(doc.content);
             if (preview) {
@@ -344,7 +345,6 @@ async function renderList() {
     }
 }
 
-// Search wiring
 let searchDebounce;
 searchInput?.addEventListener('input', e => {
     currentSearch = e.target.value;
@@ -390,7 +390,7 @@ async function createDoc() {
 }
 
 /* =========================================================
-   SAVE / DOWNLOAD
+   SAVE (IndexedDB)
    ========================================================= */
 function scheduleSave() {
     if (!currentDoc) return;
@@ -407,61 +407,597 @@ async function saveNow() {
     flashStatus('Saved ✓');
 }
 
-function saveBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+/* =========================================================
+   CUSTOM DOCX WRITER (Path B)
+   Walks the editor DOM and emits proper OOXML with styles.xml,
+   so files round-trip cleanly back through Mammoth.
+   ========================================================= */
+function escapeXml(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
 }
 
-function downloadAsHTML() {
-    if (!currentDoc) return;
-    const title = (titleInput.value.trim() || 'Untitled').replace(/[^\w\-]+/g, '_');
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${titleInput.value}</title>
-<style>body{font-family:sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;}</style>
-</head><body>${editorEl.innerHTML}</body></html>`;
-    saveBlob(new Blob([html], { type: 'text/html' }), title + '.html');
+// Paragraph styles we know how to write
+const PARA_STYLE_MAP = {
+    H1: 'Heading1', H2: 'Heading2', H3: 'Heading3', H4: 'Heading4',
+    H5: 'Heading5', H6: 'Heading6',
+    BLOCKQUOTE: 'Quote',
+    PRE: 'Code'
+};
+
+// Convert inline CSS style string to OOXML run properties
+function cssToRunProps(el) {
+    const styles = (el.style && el.style.cssText) ? el.style : (el.getAttribute && el.getAttribute('style') ? parseStyleString(el.getAttribute('style')) : null);
+    let rPr = '';
+
+    const tag = (el.tagName || '').toLowerCase();
+
+    // Bold / italic / underline / strike
+    const isBold = tag === 'b' || tag === 'strong' || (el.style && el.style.fontWeight && /bold|[6-9]00/.test(el.style.fontWeight));
+    const isItalic = tag === 'i' || tag === 'em' || (el.style && el.style.fontStyle === 'italic');
+    const isUnderline = tag === 'u' || (el.style && el.style.textDecoration && el.style.textDecoration.includes('underline'));
+    const isStrike = tag === 's' || tag === 'strike' || tag === 'del' || (el.style && el.style.textDecoration && el.style.textDecoration.includes('line-through'));
+
+    if (isBold) rPr += '<w:b/>';
+    if (isItalic) rPr += '<w:i/>';
+    if (isUnderline) rPr += '<w:u w:val="single"/>';
+    if (isStrike) rPr += '<w:strike/>';
+
+    // Color
+    if (el.style && el.style.color) {
+        const hex = rgbToHex(el.style.color);
+        if (hex) rPr += `<w:color w:val="${hex}"/>`;
+    }
+
+    // Background (highlight)
+    if (el.style && el.style.backgroundColor) {
+        const hex = rgbToHex(el.style.backgroundColor);
+        if (hex) rPr += `<w:shd w:val="clear" w:color="auto" w:fill="${hex}"/>`;
+    }
+
+    // Font size
+    if (el.style && el.style.fontSize) {
+        const pt = pxToHalfPt(el.style.fontSize);
+        if (pt) rPr += `<w:sz w:val="${pt}"/><w:szCs w:val="${pt}"/>`;
+    }
+
+    // Font family
+    if (el.style && el.style.fontFamily) {
+        const fam = el.style.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+        if (fam) rPr += `<w:rFonts w:ascii="${escapeXml(fam)}" w:hAnsi="${escapeXml(fam)}"/>`;
+    }
+
+    return rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
 }
 
-function downloadAsDOCX() {
-    if (!currentDoc) return;
-    if (typeof window.htmlDocx === 'undefined') {
-        alert('DOCX library not loaded (offline?). Falling back to HTML.');
-        return downloadAsHTML();
-    }
-    const title = (titleInput.value.trim() || 'Untitled').replace(/[^\w\-]+/g, '_');
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${titleInput.value}</title>
-<style>
-  body { font-family: Calibri, sans-serif; font-size: 11pt; line-height: 1.5; }
-  h1 { font-size: 20pt; } h2 { font-size: 16pt; } h3 { font-size: 13pt; }
-  blockquote { border-left: 3px solid #2b7fff; padding-left: 10px; color: #555; }
-  table { border-collapse: collapse; width: 100%; }
-  td { border: 1px solid #ccc; padding: 6px; }
-</style>
-</head><body>${editorEl.innerHTML}</body></html>`;
+function parseStyleString(s) {
+    const fake = document.createElement('span');
+    fake.setAttribute('style', s || '');
+    return fake.style;
+}
 
-    try {
-        const blob = window.htmlDocx.asBlob(html, {
-            orientation: 'portrait',
-            margins: { top: 720, right: 720, bottom: 720, left: 720 }
-        });
-        saveBlob(blob, title + '.docx');
-    } catch (err) {
-        console.error('DOCX export failed:', err);
-        alert('DOCX export failed. Downloading as HTML instead.');
-        downloadAsHTML();
+function rgbToHex(rgb) {
+    if (!rgb) return null;
+    if (rgb.startsWith('#')) return rgb.slice(1).toUpperCase().padStart(6, '0');
+    const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!m) return null;
+    const [_, r, g, b] = m;
+    const h = (n) => parseInt(n, 10).toString(16).padStart(2, '0');
+    return (h(r) + h(g) + h(b)).toUpperCase();
+}
+
+function pxToHalfPt(px) {
+    const n = parseFloat(px);
+    if (isNaN(n)) return null;
+    // 1 pt = 1.333 px; 1 pt = 2 half-points
+    return Math.round(n * 1.5);
+}
+
+// Convert a single text-containing element into <w:r> runs
+function elementToRuns(node, inheritedRPr = '') {
+    if (node.nodeType === 3) {
+        const text = node.textContent;
+        if (!text) return '';
+        return `<w:r>${inheritedRPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
     }
+    if (node.nodeType !== 1) return '';
+
+    const tag = node.tagName.toLowerCase();
+
+    // Skip style-only wrappers we don't care about
+    if (tag === 'br') {
+        return `<w:r>${inheritedRPr}<w:br/></w:r>`;
+    }
+
+    // Anchors → hyperlink runs (simplified: write as plain text with underline + color)
+    if (tag === 'a') {
+        const text = node.textContent || node.href;
+        const rPr = `<w:rPr><w:color w:val="2B7FFF"/><w:u w:val="single"/></w:rPr>`;
+        return `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
+    }
+
+    // Images — write as inline text placeholder (images are complex in OOXML)
+    if (tag === 'img') {
+        const alt = node.getAttribute('alt') || 'image';
+        return `<w:r>${inheritedRPr}<w:t xml:space="preserve">[${escapeXml(alt)}]</w:t></w:r>`;
+    }
+
+    // Merge this element's inline styles with inherited
+    const ownRPr = cssToRunProps(node);
+    const mergedRPr = ownRPr || inheritedRPr;
+
+    let out = '';
+    for (const child of node.childNodes) {
+        out += elementToRuns(child, mergedRPr);
+    }
+    return out;
+}
+
+// Convert a paragraph-like element into <w:p>
+function elementToParagraph(el) {
+    const tag = el.tagName ? el.tagName.toUpperCase() : '';
+    const styleId = PARA_STYLE_MAP[tag];
+
+    let pPr = '';
+    if (styleId) {
+        pPr += `<w:pStyle w:val="${styleId}"/>`;
+    }
+
+    // Text alignment
+    if (el.style && el.style.textAlign) {
+        const map = { left: 'left', right: 'right', center: 'center', justify: 'both' };
+        const jc = map[el.style.textAlign];
+        if (jc) pPr += `<w:jc w:val="${jc}"/>`;
+    }
+
+    const runs = elementToRuns(el, '');
+    const pPrXml = pPr ? `<w:pPr>${pPr}</w:pPr>` : '';
+    return `<w:p>${pPrXml}${runs}</w:p>`;
+}
+
+// Convert a list (ul/ol) into a sequence of <w:p> with numbering
+function listToListParagraphs(list) {
+    const isOrdered = list.tagName.toLowerCase() === 'ol';
+    const items = Array.from(list.children).filter(c => c.tagName.toLowerCase() === 'li');
+    let out = '';
+    items.forEach(li => {
+        const text = elementToRuns(li, '');
+        const numPr = isOrdered
+            ? '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr>'
+            : '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>';
+        out += `<w:p><w:pPr>${numPr}</w:pPr>${text}</w:p>`;
+    });
+    return out;
+}
+
+// Convert a table into <w:tbl>
+function tableToOoxml(table) {
+    const rows = Array.from(table.rows);
+    if (!rows.length) return '';
+
+    let out = '<w:tbl>';
+    out += `<w:tblPr>
+    <w:tblStyle w:val="TableGrid"/>
+    <w:tblW w:w="5000" w:type="pct"/>
+    <w:tblBorders>
+      <w:top w:val="single" w:sz="4" w:color="auto"/>
+      <w:left w:val="single" w:sz="4" w:color="auto"/>
+      <w:bottom w:val="single" w:sz="4" w:color="auto"/>
+      <w:right w:val="single" w:sz="4" w:color="auto"/>
+      <w:insideH w:val="single" w:sz="4" w:color="auto"/>
+      <w:insideV w:val="single" w:sz="4" w:color="auto"/>
+    </w:tblBorders>
+  </w:tblPr>`;
+
+    for (const row of rows) {
+        out += '<w:tr>';
+        for (const cell of row.cells) {
+            const runs = elementToRuns(cell, '');
+            out += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p>${runs}</w:p></w:tc>`;
+        }
+        out += '</w:tr>';
+    }
+    out += '</w:tbl><w:p/>';
+    return out;
+}
+
+// Walk editor children and produce the body content
+function buildDocumentBody(rootEl) {
+    let out = '';
+    const children = Array.from(rootEl.childNodes);
+
+    for (const node of children) {
+        if (node.nodeType === 3) {
+            const text = node.textContent.trim();
+            if (text) {
+                out += `<w:p><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+            }
+            continue;
+        }
+        if (node.nodeType !== 1) continue;
+
+        const tag = node.tagName.toLowerCase();
+
+        if (tag === 'ul' || tag === 'ol') {
+            out += listToListParagraphs(node);
+        } else if (tag === 'table') {
+            out += tableToOoxml(node);
+        } else if (tag === 'hr') {
+            out += `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:color="888888"/></w:pBdr></w:pPr></w:p>`;
+        } else if (tag === 'div' || tag === 'section' || tag === 'article') {
+            out += buildDocumentBody(node);
+        } else {
+            out += elementToParagraph(node);
+        }
+    }
+
+    if (!out.trim()) {
+        out = '<w:p/>';
+    }
+    return out;
+}
+
+// ---- Static OOXML side files ----
+function buildContentTypes() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`;
+}
+
+function buildRels() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+}
+
+function buildDocumentRels() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+</Relationships>`;
+}
+
+function buildStylesXml() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault>
+      <w:rPr>
+        <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>
+        <w:sz w:val="22"/><w:szCs w:val="22"/>
+      </w:rPr>
+    </w:rPrDefault>
+  </w:docDefaults>
+
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/><w:qFormat/>
+  </w:style>
+
+  <w:style w:type="paragraph" w:styleId="Heading1">
+    <w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+    <w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="240" w:after="120"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="36"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2">
+    <w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+    <w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="200" w:after="100"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="28"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading3">
+    <w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+    <w:pPr><w:outlineLvl w:val="2"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="24"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading4">
+    <w:name w:val="heading 4"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+    <w:pPr><w:outlineLvl w:val="3"/></w:pPr>
+    <w:rPr><w:b/><w:i/><w:sz w:val="22"/></w:rPr>
+  </w:style>
+
+  <w:style w:type="paragraph" w:styleId="Quote">
+    <w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+    <w:pPr><w:ind w:left="720"/><w:pBdr><w:left w:val="single" w:sz="12" w:color="2B7FFF"/></w:pBdr></w:pPr>
+    <w:rPr><w:i/><w:color w:val="555555"/></w:rPr>
+  </w:style>
+
+  <w:style w:type="paragraph" w:styleId="Code">
+    <w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
+    <w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:sz w:val="20"/></w:rPr>
+  </w:style>
+</w:styles>`;
+}
+
+function buildNumberingXml() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="1">
+    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+</w:numbering>`;
+}
+
+function buildCoreXml(title) {
+    const now = new Date().toISOString();
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>${escapeXml(title)}</dc:title>
+  <dc:creator>Quickie Docs</dc:creator>
+  <cp:lastModifiedBy>Quickie Docs</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`;
+}
+
+function buildAppXml() {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
+  <Application>Quickie Docs</Application>
+</Properties>`;
+}
+
+// Top-level: generate a real .docx Blob
+async function generateDocxBlob(title, editorHtml) {
+    if (!window.JSZip) {
+        throw new Error('JSZip not loaded — cannot generate DOCX.');
+    }
+
+    // Parse the editor HTML into a temp DOM so we can walk it
+    const temp = document.createElement('div');
+    temp.innerHTML = editorHtml || '';
+
+    const bodyXml = buildDocumentBody(temp);
+
+    const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    ${bodyXml}
+    <w:sectPr>
+      <w:pgSz w:w="12240" w:h="15840"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`;
+
+    const zip = new window.JSZip();
+    zip.file('[Content_Types].xml', buildContentTypes());
+    zip.folder('_rels').file('.rels', buildRels());
+    const word = zip.folder('word');
+    word.file('document.xml', documentXml);
+    word.file('styles.xml', buildStylesXml());
+    word.file('numbering.xml', buildNumberingXml());
+    word.folder('_rels').file('document.xml.rels', buildDocumentRels());
+    const props = zip.folder('docProps');
+    props.file('core.xml', buildCoreXml(title));
+    props.file('app.xml', buildAppXml());
+
+    return await zip.generateAsync({
+        type: 'blob',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        compression: 'DEFLATE'
+    });
 }
 
 /* =========================================================
-   IMPORT — router
+   SAVE AS — Format generators
+   ========================================================= */
+function buildHtmlBlob(title) {
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;}</style>
+</head><body>${editorEl.innerHTML}</body></html>`;
+    return new Blob([html], { type: 'text/html' });
+}
+
+function buildTxtBlob() {
+    const text = editorEl.innerText || '';
+    return new Blob([text], { type: 'text/plain' });
+}
+
+function buildMdBlob() {
+    const html = editorEl.innerHTML || '';
+    const md = htmlToMarkdown(html);
+    return new Blob([md], { type: 'text/markdown' });
+}
+
+function htmlToMarkdown(html) {
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+
+    function walk(node) {
+        if (node.nodeType === 3) return node.textContent;
+        if (node.nodeType !== 1) return '';
+
+        const tag = node.tagName.toLowerCase();
+        const inner = Array.from(node.childNodes).map(walk).join('');
+
+        switch (tag) {
+            case 'h1': return `\n# ${inner.trim()}\n\n`;
+            case 'h2': return `\n## ${inner.trim()}\n\n`;
+            case 'h3': return `\n### ${inner.trim()}\n\n`;
+            case 'h4': return `\n#### ${inner.trim()}\n\n`;
+            case 'h5': return `\n##### ${inner.trim()}\n\n`;
+            case 'h6': return `\n###### ${inner.trim()}\n\n`;
+            case 'p': return `${inner.trim()}\n\n`;
+            case 'br': return `\n`;
+            case 'strong': case 'b': return `**${inner}**`;
+            case 'em': case 'i': return `*${inner}*`;
+            case 'u': return `<u>${inner}</u>`;
+            case 's': case 'strike': case 'del': return `~~${inner}~~`;
+            case 'a': {
+                const href = node.getAttribute('href') || '#';
+                return `[${inner}](${href})`;
+            }
+            case 'code': return `\`${inner}\``;
+            case 'pre': return `\n\`\`\`\n${node.textContent}\n\`\`\`\n\n`;
+            case 'blockquote': return `\n> ${inner.trim().replace(/\n/g, '\n> ')}\n\n`;
+            case 'ul': return '\n' + Array.from(node.children).map(li => `- ${walk(li).trim()}`).join('\n') + '\n\n';
+            case 'ol': return '\n' + Array.from(node.children).map((li, i) => `${i + 1}. ${walk(li).trim()}`).join('\n') + '\n\n';
+            case 'li': return inner;
+            case 'hr': return `\n---\n\n`;
+            case 'img': {
+                const alt = node.getAttribute('alt') || 'image';
+                const src = node.getAttribute('src') || '';
+                return `![${alt}](${src})`;
+            }
+            case 'table': {
+                const rows = Array.from(node.rows);
+                if (!rows.length) return '';
+                let md = '\n';
+                rows.forEach((row, ri) => {
+                    const cells = Array.from(row.cells).map(c => c.textContent.trim());
+                    md += '| ' + cells.join(' | ') + ' |\n';
+                    if (ri === 0) md += '|' + cells.map(() => ' --- ').join('|') + '|\n';
+                });
+                return md + '\n';
+            }
+            default: return inner;
+        }
+    }
+
+    return walk(temp).replace(/\n{3,}/g, '\n\n').trim() + '\n';
+}
+
+/* =========================================================
+   SAVE AS — File System Access + fallback
+   ========================================================= */
+async function getBlobForType(type, title) {
+    switch (type) {
+        case 'docx': return await generateDocxBlob(title, editorEl.innerHTML);
+        case 'html': return buildHtmlBlob(title);
+        case 'txt': return buildTxtBlob();
+        case 'md': return buildMdBlob();
+        default: throw new Error('Unknown format: ' + type);
+    }
+}
+
+function getMimeAndExt(type) {
+    switch (type) {
+        case 'docx': return {
+            mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            ext: '.docx',
+            description: 'Word Document'
+        };
+        case 'html': return { mime: 'text/html', ext: '.html', description: 'Web Page' };
+        case 'txt': return { mime: 'text/plain', ext: '.txt', description: 'Plain Text' };
+        case 'md': return { mime: 'text/markdown', ext: '.md', description: 'Markdown' };
+    }
+}
+
+async function performSaveAs(type, filename) {
+    if (!currentDoc) return;
+    const { mime, ext, description } = getMimeAndExt(type);
+    const finalName = (filename || currentDoc.title || 'Untitled').trim() + ext;
+
+    let blob;
+    try {
+        blob = await getBlobForType(type, filename);
+    } catch (err) {
+        console.error('Save As failed to build file:', err);
+        showToast('Could not generate the file. Please try a different format.');
+        return;
+    }
+
+    // Try File System Access API first (Chrome / Edge)
+    if (window.showSaveFilePicker) {
+        try {
+            const handle = await window.showSaveFilePicker({
+                suggestedName: finalName,
+                types: [{
+                    description,
+                    accept: { [mime]: [ext] }
+                }]
+            });
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+
+            // Remember handle so next Save As points to same file
+            if (currentDoc) fileHandles[currentDoc.id] = handle;
+
+            showToast(`Saved as ${handle.name}`);
+            return;
+        } catch (err) {
+            if (err.name === 'AbortError') return;   // user cancelled
+            console.warn('showSaveFilePicker failed, falling back to download:', err);
+        }
+    }
+
+    // Fallback: standard download
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = finalName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    showToast(`Downloaded ${finalName}`);
+}
+
+function openSaveAsModal() {
+    if (!currentDoc) return;
+    saveAsName.value = (currentDoc.title || 'Untitled').replace(/[^\w\-. ]+/g, '_');
+    saveAsType.value = 'docx';
+    updateSaveAsHint();
+    saveAsModal.classList.remove('hidden');
+    setTimeout(() => { saveAsName.focus(); saveAsName.select(); }, 40);
+}
+
+function updateSaveAsHint() {
+    const t = saveAsType.value;
+    if (window.showSaveFilePicker) {
+        saveAsHint.textContent = 'Your browser will open a Save dialog where you can pick the folder.';
+    } else {
+        saveAsHint.textContent = 'Your browser does not support folder selection — the file will be downloaded to your Downloads folder.';
+    }
+}
+
+async function confirmSaveAs() {
+    const name = saveAsName.value.trim() || 'Untitled';
+    const type = saveAsType.value;
+    saveAsModal.classList.add('hidden');
+    await performSaveAs(type, name);
+}
+
+saveAsBtn?.addEventListener('click', openSaveAsModal);
+saveAsClose?.addEventListener('click', () => saveAsModal.classList.add('hidden'));
+saveAsCancel?.addEventListener('click', () => saveAsModal.classList.add('hidden'));
+saveAsConfirm?.addEventListener('click', confirmSaveAs);
+saveAsType?.addEventListener('change', updateSaveAsHint);
+saveAsModal?.addEventListener('click', e => {
+    if (e.target === saveAsModal) saveAsModal.classList.add('hidden');
+});
+
+/* =========================================================
+   IMPORT (with plain-text fallback for broken round-trips)
    ========================================================= */
 function pickAndImport() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.docx,.html,.htm,.txt,.md,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html,text/plain,text/markdown';
+    input.accept = '.docx,.html,.htm,.txt,.md';
     input.onchange = () => {
         const file = input.files[0];
         if (file) importFile(file);
@@ -479,7 +1015,7 @@ function importFile(file) {
         case 'md':
         case 'markdown': return importMarkdown(file);
         default:
-            alert('Unsupported file type: .' + ext + '\n\nSupported: .docx, .html, .htm, .txt, .md');
+            alert('Unsupported file type: .' + ext);
     }
 }
 
@@ -490,16 +1026,23 @@ function importDOCX(file) {
     }
     const reader = new FileReader();
     reader.onload = async e => {
+        const arrayBuffer = e.target.result;
         try {
             const result = await window.mammoth.convertToHtml(
-                { arrayBuffer: e.target.result },
+                { arrayBuffer },
                 {
                     styleMap: [
-                        "p[style-name='Title'] => h1.doc-title",
-                        "p[style-name='Subtitle'] => h2.doc-subtitle",
+                        "p[style-name='Title'] => h1",
+                        "p[style-name='Subtitle'] => h2",
+                        "p[style-name='heading 1'] => h1",
+                        "p[style-name='heading 2'] => h2",
+                        "p[style-name='heading 3'] => h3",
+                        "p[style-name='heading 4'] => h4",
                         "p[style-name='Quote'] => blockquote",
                         "p[style-name='Intense Quote'] => blockquote",
                         "p[style-name='Code'] => pre",
+                        "b => strong",
+                        "i => em",
                     ],
                     convertImage: window.mammoth.images.imgElement(img => {
                         return img.read('base64').then(b64 => ({
@@ -508,17 +1051,68 @@ function importDOCX(file) {
                     })
                 }
             );
-            const html = result.value || '<p></p>';
+
+            let html = (result.value || '').trim();
+
+            // Fallback: Mammoth silently returned empty (common for our own exports)
+            if (!html || /^<p>\s*<\/p>$/.test(html) || html === '<p></p>') {
+                console.warn('Mammoth returned empty HTML. Trying raw text extraction…');
+                html = await extractPlainTextFromDocx(arrayBuffer);
+                if (html) {
+                    showToast('Imported as plain text — some formatting may be lost.');
+                }
+            }
+
+            if (!html) {
+                alert('This DOCX file could not be read. It may be empty or corrupted.');
+                return;
+            }
+
+            if (!/<\w+/.test(html)) {
+                html = html.split(/\n{2,}/)
+                    .map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`)
+                    .join('');
+            }
+
             await createImportedDoc(file.name, html);
+
             if (result.messages?.length) {
-                showToast(`Imported with ${result.messages.length} warning(s). Some formatting may be lost.`);
+                console.info('Mammoth warnings:', result.messages);
             }
         } catch (err) {
             console.error('DOCX import failed:', err);
-            alert('Failed to import DOCX. The file may be corrupted or use unsupported features.');
+            alert('Failed to import DOCX. The file may be corrupted.');
         }
     };
     reader.readAsArrayBuffer(file);
+}
+
+async function extractPlainTextFromDocx(arrayBuffer) {
+    try {
+        if (!window.JSZip) return '';
+        const zip = await window.JSZip.loadAsync(arrayBuffer);
+        const docXmlFile = zip.file('word/document.xml');
+        if (!docXmlFile) return '';
+        const xml = await docXmlFile.async('string');
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(xml, 'application/xml');
+        const paragraphs = doc.getElementsByTagNameNS('*', 'p');
+        const lines = [];
+        for (const p of paragraphs) {
+            const texts = p.getElementsByTagNameNS('*', 't');
+            let line = '';
+            for (const t of texts) line += t.textContent;
+            lines.push(line);
+        }
+        const text = lines.join('\n').trim();
+        if (!text) return '';
+        return text.split(/\n{2,}/)
+            .map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`)
+            .join('');
+    } catch (err) {
+        console.error('Raw DOCX text extraction failed:', err);
+        return '';
+    }
 }
 
 function importHTML(file) {
@@ -531,21 +1125,18 @@ function importHTML(file) {
     };
     reader.readAsText(file);
 }
-
 function importTXT(file) {
     const reader = new FileReader();
     reader.onload = async e => {
         const text = e.target.result;
-        const html = text
-            .split(/\n{2,}/)
+        const html = text.split(/\n{2,}/)
             .map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`)
             .join('') || '<p></p>';
         await createImportedDoc(file.name, html);
-        showToast('TXT imported as plain paragraphs. Formatting is minimal by nature.');
+        showToast('TXT imported as plain paragraphs.');
     };
     reader.readAsText(file);
 }
-
 function importMarkdown(file) {
     const reader = new FileReader();
     reader.onload = async e => {
@@ -554,12 +1145,10 @@ function importMarkdown(file) {
     };
     reader.readAsText(file);
 }
-
 function markdownToHTML(md) {
     if (!md) return '<p></p>';
     let html = escapeHTML(md);
-
-    html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre>${code.trim()}</pre>`);
+    html = html.replace(/```([\s\S]*?)```/g, (_, c) => `<pre>${c.trim()}</pre>`);
     html = html.replace(/^###### (.*)$/gm, '<h6>$1</h6>');
     html = html.replace(/^##### (.*)$/gm, '<h5>$1</h5>');
     html = html.replace(/^#### (.*)$/gm, '<h4>$1</h4>');
@@ -576,50 +1165,29 @@ function markdownToHTML(md) {
     html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-
-    html = html.replace(/(?:^|\n)((?:[-*+] .*(?:\n|$))+)/g, (match, block) => {
-        const items = block.trim().split(/\n/)
-            .map(line => line.replace(/^[-*+] /, '').trim())
-            .filter(Boolean)
-            .map(t => `<li>${t}</li>`).join('');
+    html = html.replace(/(?:^|\n)((?:[-*+] .*(?:\n|$))+)/g, (m, b) => {
+        const items = b.trim().split(/\n/).map(l => l.replace(/^[-*+] /, '').trim()).filter(Boolean).map(t => `<li>${t}</li>`).join('');
         return `\n<ul>${items}</ul>\n`;
     });
-    html = html.replace(/(?:^|\n)((?:\d+\. .*(?:\n|$))+)/g, (match, block) => {
-        const items = block.trim().split(/\n/)
-            .map(line => line.replace(/^\d+\. /, '').trim())
-            .filter(Boolean)
-            .map(t => `<li>${t}</li>`).join('');
+    html = html.replace(/(?:^|\n)((?:\d+\. .*(?:\n|$))+)/g, (m, b) => {
+        const items = b.trim().split(/\n/).map(l => l.replace(/^\d+\. /, '').trim()).filter(Boolean).map(t => `<li>${t}</li>`).join('');
         return `\n<ol>${items}</ol>\n`;
     });
-
     const blocks = html.split(/\n{2,}/).map(b => {
-        const trimmed = b.trim();
-        if (!trimmed) return '';
-        if (/^<(h[1-6]|ul|ol|pre|blockquote|hr|p|table)/i.test(trimmed)) return trimmed;
-        return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
+        const t = b.trim();
+        if (!t) return '';
+        if (/^<(h[1-6]|ul|ol|pre|blockquote|hr|p|table)/i.test(t)) return t;
+        return `<p>${t.replace(/\n/g, '<br>')}</p>`;
     });
-
     return blocks.join('\n') || '<p></p>';
 }
-
 function escapeHTML(s) {
-    return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-
 async function createImportedDoc(filename, html) {
     const now = Date.now();
     const baseName = filename.replace(/\.[^.]+$/, '').slice(0, 60) || 'Imported';
-    const doc = {
-        id: uid(),
-        title: baseName,
-        content: html || '<p></p>',
-        createdAt: now,
-        updatedAt: now
-    };
+    const doc = { id: uid(), title: baseName, content: html || '<p></p>', createdAt: now, updatedAt: now };
     await dbPut(doc);
     await openDoc(doc.id);
     flashStatus('Imported ✓');
@@ -628,16 +1196,10 @@ async function createImportedDoc(filename, html) {
 importBtn?.addEventListener('click', pickAndImport);
 
 ['dragenter', 'dragover'].forEach(ev => {
-    docList.addEventListener(ev, e => {
-        e.preventDefault();
-        docList.classList.add('drag-over');
-    });
+    docList.addEventListener(ev, e => { e.preventDefault(); docList.classList.add('drag-over'); });
 });
 ['dragleave', 'drop'].forEach(ev => {
-    docList.addEventListener(ev, e => {
-        e.preventDefault();
-        docList.classList.remove('drag-over');
-    });
+    docList.addEventListener(ev, e => { e.preventDefault(); docList.classList.remove('drag-over'); });
 });
 docList.addEventListener('drop', e => {
     const file = e.dataTransfer.files?.[0];
@@ -645,7 +1207,7 @@ docList.addEventListener('drop', e => {
 });
 
 /* =========================================================
-   PRINT / SAVE AS PDF
+   PRINT / PDF
    ========================================================= */
 function printDoc() {
     if (!currentDoc) return;
@@ -659,24 +1221,19 @@ function printDoc() {
   h1 { font-size: 22pt; margin: 0 0 12pt; page-break-after: avoid; }
   h2 { font-size: 16pt; margin: 18pt 0 8pt; page-break-after: avoid; }
   h3 { font-size: 13pt; margin: 14pt 0 6pt; page-break-after: avoid; }
-  h4 { font-size: 12pt; margin: 12pt 0 4pt; page-break-after: avoid; }
-  p  { margin: 0 0 10pt; orphans: 3; widows: 3; }
-  ul, ol { margin: 0 0 10pt 22pt; padding: 0; }
-  li { margin-bottom: 4pt; }
-  blockquote { border-left: 3pt solid #2b7fff; padding: 0 0 0 12pt; margin: 12pt 0; color: #4a5568; font-style: italic; page-break-inside: avoid; }
-  pre { background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 4pt; padding: 10pt 12pt; margin: 12pt 0; font-family: 'Courier New', monospace; font-size: 10pt; white-space: pre-wrap; page-break-inside: avoid; }
+  p { margin: 0 0 10pt; orphans: 3; widows: 3; }
+  ul, ol { margin: 0 0 10pt 22pt; }
+  blockquote { border-left: 3pt solid #2b7fff; padding-left: 12pt; color: #4a5568; font-style: italic; }
+  pre { background: #f3f4f6; padding: 10pt; border-radius: 4pt; font-family: 'Courier New', monospace; font-size: 10pt; white-space: pre-wrap; }
   a { color: #2b7fff; text-decoration: underline; }
-  img { max-width: 100%; height: auto; page-break-inside: avoid; }
-  table { border-collapse: collapse; width: 100%; margin: 12pt 0; page-break-inside: avoid; }
-  td { border: 1pt solid #cbd5e1; padding: 6pt 8pt; vertical-align: top; }
+  img { max-width: 100%; height: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  td { border: 1pt solid #cbd5e1; padding: 6pt 8pt; }
   hr { border: none; border-top: 1pt solid #cbd5e1; margin: 16pt 0; }
   hr.page-break { page-break-after: always; border: none; height: 0; margin: 0; }
-  .doc-comment { background: #fff8b8; border-bottom: 2pt solid #f0c000; }
 </style>
-</head>
-<body>${editorEl.innerHTML}</body></html>`);
-    w.document.close();
-    w.focus();
+</head><body>${editorEl.innerHTML}</body></html>`);
+    w.document.close(); w.focus();
     setTimeout(() => { w.print(); }, 400);
 }
 
@@ -688,14 +1245,13 @@ document.querySelectorAll('.ribbon-tabs .tab').forEach(tab => {
         document.querySelectorAll('.ribbon-tabs .tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.ribbon-panel').forEach(p => p.classList.remove('active'));
         tab.classList.add('active');
-        document.querySelector(`.ribbon-panel[data-panel="${tab.dataset.tab}"]`)
-            ?.classList.add('active');
+        document.querySelector(`.ribbon-panel[data-panel="${tab.dataset.tab}"]`)?.classList.add('active');
         requestAnimationFrame(updateCollapse);
     });
 });
 
 /* =========================================================
-   GENERIC execCommand
+   RIBBON execCommand BUTTONS
    ========================================================= */
 ribbon.addEventListener('click', e => {
     const btn = e.target.closest('button[data-cmd]');
@@ -709,10 +1265,7 @@ ribbon.addEventListener('click', e => {
    FONT CONTROLS
    ========================================================= */
 function applyFontName(family) {
-    if (family === 'default') {
-        document.execCommand('removeFormat');
-        return;
-    }
+    if (family === 'default') { document.execCommand('removeFormat'); return; }
     document.execCommand('fontName', false, family);
 }
 function applyFontSize(px) {
@@ -720,7 +1273,6 @@ function applyFontSize(px) {
     if (!sel.rangeCount) return;
     const range = sel.getRangeAt(0);
     try { document.execCommand('styleWithCSS', false, true); } catch (_) { }
-
     if (sel.isCollapsed) {
         document.execCommand('fontSize', false, '7');
         editorEl.querySelectorAll('font[size="7"]').forEach(el => {
@@ -745,14 +1297,8 @@ function applyFontSize(px) {
 function bindFontControls(familyId, sizeId) {
     const fam = document.getElementById(familyId);
     const size = document.getElementById(sizeId);
-    if (fam) fam.addEventListener('change', e => {
-        applyFontName(e.target.value);
-        scheduleSave(); editorEl.focus();
-    });
-    if (size) size.addEventListener('change', e => {
-        applyFontSize(parseInt(e.target.value, 10));
-        scheduleSave(); editorEl.focus();
-    });
+    if (fam) fam.addEventListener('change', e => { applyFontName(e.target.value); scheduleSave(); editorEl.focus(); });
+    if (size) size.addEventListener('change', e => { applyFontSize(parseInt(e.target.value, 10)); scheduleSave(); editorEl.focus(); });
 }
 bindFontControls('font-family', 'font-size');
 bindFontControls('font-family-compact', 'font-size-compact');
@@ -760,18 +1306,8 @@ bindFontControls('font-family-compact', 'font-size-compact');
 /* =========================================================
    COLOR PICKERS
    ========================================================= */
-const PRESET_TEXT_COLORS = [
-    '#000000', '#1f2328', '#6b7280', '#9ca3af', '#d1d5db',
-    '#dc2626', '#ea580c', '#eab308', '#16a34a', '#0891b2',
-    '#2563eb', '#2b7fff', '#7c3aed', '#db2777', '#f472b6',
-    '#92400e', '#0f766e', '#1e3a8a', '#701a75', '#ffffff'
-];
-const PRESET_HIGHLIGHT_COLORS = [
-    '#ffff00', '#fef08a', '#fde047', '#bbf7d0', '#86efac',
-    '#a5f3fc', '#bae6fd', '#c7d2fe', '#e9d5ff', '#fbcfe8',
-    '#fecaca', '#fed7aa', '#fef3c7', '#dcfce7', '#dbeafe',
-    '#e0e7ff', '#f3e8ff', '#fce7f3', '#ffe4e6', '#ffffff'
-];
+const PRESET_TEXT_COLORS = ['#000000', '#1f2328', '#6b7280', '#9ca3af', '#d1d5db', '#dc2626', '#ea580c', '#eab308', '#16a34a', '#0891b2', '#2563eb', '#2b7fff', '#7c3aed', '#db2777', '#f472b6', '#92400e', '#0f766e', '#1e3a8a', '#701a75', '#ffffff'];
+const PRESET_HIGHLIGHT_COLORS = ['#ffff00', '#fef08a', '#fde047', '#bbf7d0', '#86efac', '#a5f3fc', '#bae6fd', '#c7d2fe', '#e9d5ff', '#fbcfe8', '#fecaca', '#fed7aa', '#fef3c7', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff', '#fce7f3', '#ffe4e6', '#ffffff'];
 
 function buildColorGrids() {
     document.querySelectorAll('.color-grid').forEach(grid => {
@@ -801,9 +1337,7 @@ function applyColor(command, color) {
 }
 function updateColorSwatches(command, color) {
     const picker = document.querySelector(
-        command === 'foreColor'
-            ? '.color-picker[data-color-target="foreColor"]'
-            : '.color-picker[data-color-target="hiliteColor"]'
+        command === 'foreColor' ? '.color-picker[data-color-target="foreColor"]' : '.color-picker[data-color-target="hiliteColor"]'
     );
     if (!picker) return;
     const letter = picker.querySelector('.color-letter');
@@ -821,7 +1355,6 @@ function initColorPickers() {
         const menu = picker.querySelector('.color-menu');
         const native = picker.querySelector('input[type="color"]');
         const customBtn = picker.querySelector('.color-custom');
-
         mainBtn?.addEventListener('click', e => {
             e.stopPropagation();
             const current = picker.querySelector('.color-letter').style.borderBottomColor || '#1f2328';
@@ -833,14 +1366,8 @@ function initColorPickers() {
             closeAllColorMenus();
             if (wasHidden) menu.classList.remove('hidden');
         });
-        customBtn?.addEventListener('click', e => {
-            e.stopPropagation();
-            native.click();
-        });
-        native?.addEventListener('input', e => {
-            applyColor(command, e.target.value);
-            closeAllColorMenus();
-        });
+        customBtn?.addEventListener('click', e => { e.stopPropagation(); native.click(); });
+        native?.addEventListener('input', e => { applyColor(command, e.target.value); closeAllColorMenus(); });
         menu?.addEventListener('click', e => e.stopPropagation());
     });
     document.addEventListener('click', () => closeAllColorMenus());
@@ -848,7 +1375,7 @@ function initColorPickers() {
 initColorPickers();
 
 /* =========================================================
-   CLEAR / LINE HEIGHT
+   CLEAR / LINE HEIGHT / getSelectedBlocks
    ========================================================= */
 document.getElementById('clear-format')?.addEventListener('click', () => {
     document.execCommand('removeFormat'); scheduleSave(); editorEl.focus();
@@ -865,8 +1392,7 @@ function getSelectedBlocks() {
     const blocks = new Set();
     let node = range.startContainer;
     while (node && node !== editorEl) {
-        if (node.nodeType === 1 && /^(P|DIV|H[1-6]|LI|BLOCKQUOTE|PRE)$/.test(node.tagName))
-            blocks.add(node);
+        if (node.nodeType === 1 && /^(P|DIV|H[1-6]|LI|BLOCKQUOTE|PRE)$/.test(node.tagName)) blocks.add(node);
         node = node.parentNode;
     }
     if (!blocks.size) blocks.add(editorEl);
@@ -874,11 +1400,24 @@ function getSelectedBlocks() {
 }
 
 /* =========================================================
-   IMAGE COMPRESSION
+   INSERT HELPERS
    ========================================================= */
+document.getElementById('insert-link')?.addEventListener('click', () => {
+    const sel = window.getSelection();
+    const existing = sel.toString();
+    const url = prompt('Enter URL (https://...)', 'https://');
+    if (!url) return;
+    if (existing) document.execCommand('createLink', false, url);
+    else {
+        const label = prompt('Link text?', url);
+        if (!label) return;
+        document.execCommand('insertHTML', false, `<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
+    }
+    scheduleSave(); editorEl.focus();
+});
+
 const IMAGE_MAX_WIDTH = 1600;
 const IMAGE_QUALITY = 0.82;
-
 function compressImage(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -894,19 +1433,12 @@ function compressImage(file) {
                 const canvas = document.createElement('canvas');
                 canvas.width = width;
                 canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, width, height);
-
-                // Choose output format: keep PNG for transparent images, else JPEG
+                canvas.getContext('2d').drawImage(img, 0, 0, width, height);
                 const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
-                const quality = type === 'image/jpeg' ? IMAGE_QUALITY : undefined;
-
                 canvas.toBlob(blob => {
-                    if (!blob) return reject(new Error('Canvas encode failed'));
-                    // If compression made it bigger, keep the original
-                    if (blob.size > file.size) resolve(file);
-                    else resolve(blob);
-                }, type, quality);
+                    if (!blob) return reject(new Error('Canvas failed'));
+                    resolve(blob.size > file.size ? file : blob);
+                }, type, type === 'image/jpeg' ? IMAGE_QUALITY : undefined);
             };
             img.onerror = reject;
             img.src = reader.result;
@@ -915,16 +1447,14 @@ function compressImage(file) {
         reader.readAsDataURL(file);
     });
 }
-
 function blobToDataURL(blob) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
+    return new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = rej;
+        r.readAsDataURL(blob);
     });
 }
-
 document.getElementById('insert-image')?.addEventListener('click', () => {
     const input = document.createElement('input');
     input.type = 'file'; input.accept = 'image/*';
@@ -934,15 +1464,11 @@ document.getElementById('insert-image')?.addEventListener('click', () => {
             const compressed = await compressImage(file);
             const dataUrl = await blobToDataURL(compressed);
             document.execCommand('insertImage', false, dataUrl);
-            scheduleSave();
-            editorEl.focus();
+            scheduleSave(); editorEl.focus();
             const saved = Math.max(0, file.size - compressed.size);
-            if (saved > 1024) {
-                showToast(`Image compressed — saved ${(saved / 1024).toFixed(0)} KB`);
-            }
+            if (saved > 1024) showToast(`Image compressed — saved ${(saved / 1024).toFixed(0)} KB`);
         } catch (err) {
             console.error('Image compression failed:', err);
-            // Fallback: insert original
             const reader = new FileReader();
             reader.onload = () => {
                 document.execCommand('insertImage', false, reader.result);
@@ -952,24 +1478,6 @@ document.getElementById('insert-image')?.addEventListener('click', () => {
         }
     };
     input.click();
-});
-
-/* =========================================================
-   INSERT HELPERS
-   ========================================================= */
-document.getElementById('insert-link')?.addEventListener('click', () => {
-    const sel = window.getSelection();
-    const existing = sel.toString();
-    const url = prompt('Enter URL (https://...)', 'https://');
-    if (!url) return;
-    if (existing) document.execCommand('createLink', false, url);
-    else {
-        const label = prompt('Link text?', url);
-        if (!label) return;
-        document.execCommand('insertHTML', false,
-            `<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
-    }
-    scheduleSave(); editorEl.focus();
 });
 document.getElementById('insert-hr')?.addEventListener('click', () => {
     document.execCommand('insertHorizontalRule'); scheduleSave(); editorEl.focus();
@@ -1000,15 +1508,15 @@ document.getElementById('insert-shape')?.addEventListener('click', () => {
     scheduleSave(); editorEl.focus();
 });
 document.getElementById('insert-emoji')?.addEventListener('click', () => {
-    const emoji = prompt('Type or paste an emoji:', '😀');
-    if (!emoji) return;
-    document.execCommand('insertText', false, emoji);
+    const e = prompt('Type or paste an emoji:', '😀');
+    if (!e) return;
+    document.execCommand('insertText', false, e);
     scheduleSave(); editorEl.focus();
 });
 document.getElementById('insert-symbol')?.addEventListener('click', () => {
-    const sym = prompt('Type or paste a symbol (©, →, √, π, …):', '©');
-    if (!sym) return;
-    document.execCommand('insertText', false, sym);
+    const s = prompt('Type or paste a symbol:', '©');
+    if (!s) return;
+    document.execCommand('insertText', false, s);
     scheduleSave(); editorEl.focus();
 });
 document.getElementById('insert-date')?.addEventListener('click', () => {
@@ -1030,13 +1538,9 @@ editorEl.addEventListener('contextmenu', e => {
     e.preventDefault();
     tableMenuTargetCell = cell;
     tableMenu.classList.remove('hidden');
-    // Position near cursor
-    const x = Math.min(e.clientX, window.innerWidth - 240);
-    const y = Math.min(e.clientY, window.innerHeight - 300);
-    tableMenu.style.left = x + 'px';
-    tableMenu.style.top = y + 'px';
+    tableMenu.style.left = Math.min(e.clientX, window.innerWidth - 240) + 'px';
+    tableMenu.style.top = Math.min(e.clientY, window.innerHeight - 300) + 'px';
 });
-
 tableMenu.addEventListener('click', e => {
     const btn = e.target.closest('button[data-table-action]');
     if (!btn || !tableMenuTargetCell) return;
@@ -1045,68 +1549,41 @@ tableMenu.addEventListener('click', e => {
     const row = cell.parentElement;
     const table = cell.closest('table');
     if (!row || !table) return;
-
-    const cellIndex = Array.from(row.children).indexOf(cell);
-
+    const idx = Array.from(row.children).indexOf(cell);
+    const newCell = () => { const td = document.createElement('td'); td.innerHTML = '<br>'; return td; };
     switch (action) {
         case 'row-above': {
-            const newRow = row.cloneNode(false);
-            const cols = row.children.length;
-            for (let i = 0; i < cols; i++) {
-                const td = document.createElement('td');
-                td.innerHTML = '<br>';
-                newRow.appendChild(td);
-            }
-            row.parentNode.insertBefore(newRow, row);
+            const nr = row.cloneNode(false);
+            for (let i = 0; i < row.children.length; i++) nr.appendChild(newCell());
+            row.parentNode.insertBefore(nr, row);
             break;
         }
         case 'row-below': {
-            const newRow = row.cloneNode(false);
-            const cols = row.children.length;
-            for (let i = 0; i < cols; i++) {
-                const td = document.createElement('td');
-                td.innerHTML = '<br>';
-                newRow.appendChild(td);
-            }
-            row.parentNode.insertBefore(newRow, row.nextSibling);
+            const nr = row.cloneNode(false);
+            for (let i = 0; i < row.children.length; i++) nr.appendChild(newCell());
+            row.parentNode.insertBefore(nr, row.nextSibling);
             break;
         }
         case 'col-left': {
             Array.from(table.rows).forEach(r => {
-                const td = document.createElement('td');
-                td.innerHTML = '<br>';
-                const ref = r.children[cellIndex];
-                if (ref) r.insertBefore(td, ref);
+                const ref = r.children[idx];
+                if (ref) r.insertBefore(newCell(), ref);
             });
             break;
         }
         case 'col-right': {
             Array.from(table.rows).forEach(r => {
-                const td = document.createElement('td');
-                td.innerHTML = '<br>';
-                const ref = r.children[cellIndex];
-                if (ref) r.insertBefore(td, ref.nextSibling);
+                const ref = r.children[idx];
+                if (ref) r.insertBefore(newCell(), ref.nextSibling);
             });
             break;
         }
-        case 'row-delete': {
-            row.remove();
-            break;
-        }
-        case 'col-delete': {
-            Array.from(table.rows).forEach(r => {
-                if (r.children[cellIndex]) r.children[cellIndex].remove();
-            });
-            break;
-        }
-        case 'table-delete': {
-            table.remove();
-            break;
-        }
+        case 'row-delete': row.remove(); break;
+        case 'col-delete': Array.from(table.rows).forEach(r => r.children[idx]?.remove()); break;
+        case 'table-delete': table.remove(); break;
     }
     tableMenu.classList.add('hidden');
-    scheduleSave();
-    editorEl.focus();
+    scheduleSave(); editorEl.focus();
 });
 
 /* =========================================================
@@ -1132,7 +1609,6 @@ findInput?.addEventListener('input', () => {
     let count = 0, i = 0;
     while ((i = text.indexOf(lower, i)) !== -1) { count++; i += lower.length; }
     findCount.textContent = `${count} match${count === 1 ? '' : 'es'}`;
-
     const sel = window.getSelection();
     sel.removeAllRanges();
     const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
@@ -1173,8 +1649,7 @@ document.getElementById('wordcount-btn')?.addEventListener('click', showWordCoun
 document.getElementById('wordcount-btn-2')?.addEventListener('click', showWordCount);
 document.addEventListener('click', e => {
     if (wcPopup.classList.contains('hidden')) return;
-    if (!wcPopup.contains(e.target) && !e.target.closest('#wordcount-btn, #wordcount-btn-2'))
-        wcPopup.classList.add('hidden');
+    if (!wcPopup.contains(e.target) && !e.target.closest('#wordcount-btn, #wordcount-btn-2')) wcPopup.classList.add('hidden');
 });
 
 /* =========================================================
@@ -1227,9 +1702,8 @@ document.querySelector('.file-menu-row')?.addEventListener('click', e => {
     const action = b.dataset.file;
     if (action === 'new') createDoc();
     if (action === 'save') saveNow();
+    if (action === 'save-as') openSaveAsModal();
     if (action === 'import') pickAndImport();
-    if (action === 'download-html') downloadAsHTML();
-    if (action === 'download-docx') downloadAsDOCX();
     if (action === 'print') printDoc();
     if (action === 'back') saveNow().then(showList);
 });
@@ -1271,18 +1745,14 @@ const COMMANDS = [
     { name: 'Fullscreen', icon: '⛶', run: () => document.getElementById('fullscreen-btn')?.click() },
     { name: 'Print / Save as PDF', icon: '🖨', run: printDoc },
     { name: 'Save', icon: '💾', run: saveNow },
+    { name: 'Save As…', icon: '⬇', run: openSaveAsModal },
     { name: 'Import File', icon: '📂', run: pickAndImport },
-    { name: 'Download as DOCX', icon: '📝', run: downloadAsDOCX },
-    { name: 'Export HTML (backup)', icon: '⬇', run: downloadAsHTML },
     { name: 'New Document', icon: '📄', run: createDoc },
     { name: 'Back to Documents', icon: '←', run: () => saveNow().then(showList) },
     {
         name: 'Search Documents', icon: '🔎', run: () => {
-            if (!editorView.classList.contains('hidden')) {
-                saveNow().then(() => { showList(); searchInput.focus(); });
-            } else {
-                searchInput.focus();
-            }
+            if (!editorView.classList.contains('hidden')) saveNow().then(() => { showList(); searchInput.focus(); });
+            else searchInput.focus();
         }
     },
     { name: 'Toggle Compact Toolbar', icon: '⇕', run: () => document.getElementById('compact-toggle')?.click() },
@@ -1317,20 +1787,19 @@ function renderPalette(query) {
         li.className = i === paletteSelection ? 'selected' : '';
         li.innerHTML = `<span class="p-icon">${cmd.icon}</span><span>${cmd.name}</span>`;
         li.addEventListener('mouseenter', () => { paletteSelection = i; updatePaletteSelection(); });
-        li.addEventListener('click', () => { runPaletteSelection(); });
+        li.addEventListener('click', () => runPaletteSelection());
         paletteList.appendChild(li);
     });
 }
 function updatePaletteSelection() {
-    [...paletteList.children].forEach((li, i) =>
-        li.classList.toggle('selected', i === paletteSelection));
+    [...paletteList.children].forEach((li, i) => li.classList.toggle('selected', i === paletteSelection));
 }
 function runPaletteSelection() {
     const cmd = paletteFiltered[paletteSelection];
     if (!cmd) return;
     closePalette();
     cmd.run();
-    const keepFocus = ['Save', 'Download as DOCX', 'Export HTML (backup)', 'Back to Documents', 'New Document', 'Print / Save as PDF', 'Import File', 'Install App', 'Toggle Dark Mode', 'Search Documents'].includes(cmd.name);
+    const keepFocus = ['Save', 'Save As…', 'Back to Documents', 'New Document', 'Print / Save as PDF', 'Import File', 'Install App', 'Toggle Dark Mode', 'Search Documents'].includes(cmd.name);
     if (!keepFocus) editorEl.focus();
 }
 document.getElementById('palette-btn').addEventListener('click', openPalette);
@@ -1349,9 +1818,7 @@ paletteInput.addEventListener('keydown', e => {
     } else if (e.key === 'Enter') {
         e.preventDefault();
         runPaletteSelection();
-    } else if (e.key === 'Escape') {
-        closePalette();
-    }
+    } else if (e.key === 'Escape') closePalette();
 });
 paletteOverlay.addEventListener('click', e => {
     if (e.target === paletteOverlay) closePalette();
@@ -1374,43 +1841,107 @@ document.addEventListener('selectionchange', () => {
 });
 
 /* =========================================================
-   EVENTS / SHORTCUTS
+   GLOBAL KEYBOARD SHORTCUTS — capture phase, works everywhere
    ========================================================= */
-newDocBtn.addEventListener('click', createDoc);
-backBtn.addEventListener('click', async () => { await saveNow(); showList(); });
-downloadBtn.addEventListener('click', downloadAsDOCX);
-titleInput.addEventListener('input', scheduleSave);
-editorEl.addEventListener('input', scheduleSave);
-
 document.addEventListener('keydown', e => {
-    if (editorView.classList.contains('hidden')) {
-        // Allow Ctrl+F search from list view
-        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-            e.preventDefault();
-            searchInput?.focus();
-        }
+    // Don't interfere when focus is in a text input / select / modal
+    const target = e.target;
+    const isTextInput = target && (
+        (target.tagName === 'INPUT' && target.type !== 'color') ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT'
+    );
+    const inModal = target && target.closest && target.closest('#save-as-modal');
+    if (isTextInput && !inModal) return;
+
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+
+    if (!mod) return;
+
+    // Ctrl+Shift combos first
+    if (e.shiftKey) {
+        if (key === 'p') { e.preventDefault(); e.stopPropagation(); openPalette(); return; }
+        if (key === 'd') { e.preventDefault(); e.stopPropagation(); toggleTheme(); return; }
+        if (key === 's') { e.preventDefault(); e.stopPropagation(); openSaveAsModal(); return; }
+        if (key === 'o') { e.preventDefault(); e.stopPropagation(); pickAndImport(); return; }
         return;
     }
-    const mod = e.ctrlKey || e.metaKey;
 
-    if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); openPalette(); return; }
-    if (mod && e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); toggleTheme(); return; }
-    if (mod && e.key === 'p') { e.preventDefault(); printDoc(); }
-    if (mod && e.key === 's') { e.preventDefault(); saveNow(); }
-    if (mod && e.key === 'b') { e.preventDefault(); document.execCommand('bold'); }
-    if (mod && e.key === 'i') { e.preventDefault(); document.execCommand('italic'); }
-    if (mod && e.key === 'u') { e.preventDefault(); document.execCommand('underline'); }
-    if (mod && e.key === 'k') { e.preventDefault(); document.getElementById('insert-link')?.click(); }
-    if (mod && e.key === 'f') { e.preventDefault(); findBar.classList.remove('hidden'); findInput.focus(); }
-    if (mod && e.key === 'o' && e.shiftKey) { e.preventDefault(); pickAndImport(); }
-});
+    // Plain Ctrl combos
+    switch (key) {
+        case 's':
+            e.preventDefault(); e.stopPropagation(); saveNow(); return;
+        case 'b':
+            e.preventDefault(); e.stopPropagation();
+            document.execCommand('bold');
+            updateToolbarState();
+            return;
+        case 'i':
+            e.preventDefault(); e.stopPropagation();
+            document.execCommand('italic');
+            updateToolbarState();
+            return;
+        case 'u':
+            e.preventDefault(); e.stopPropagation();
+            document.execCommand('underline');
+            updateToolbarState();
+            return;
+        case 'k':
+            e.preventDefault(); e.stopPropagation();
+            document.getElementById('insert-link')?.click();
+            return;
+        case 'p':
+            e.preventDefault(); e.stopPropagation();
+            printDoc();
+            return;
+        case 'f':
+            e.preventDefault(); e.stopPropagation();
+            if (editorView.classList.contains('hidden')) {
+                searchInput?.focus();
+            } else {
+                findBar.classList.remove('hidden');
+                findInput.focus();
+            }
+            return;
+        case 'a':
+            // Only intercept Ctrl+A inside the editor — let the browser handle it elsewhere
+            if (document.activeElement === editorEl || editorEl.contains(document.activeElement)) {
+                e.preventDefault(); e.stopPropagation();
+                const range = document.createRange();
+                range.selectNodeContents(editorEl);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+            return;
+    }
+}, true);  // ← capture phase — this is the critical part
 
+// Also intercept the browser's own "save page" hotkey when it fires
+window.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+    }
+}, true);
+
+/* =========================================================
+   PASTE AS PLAIN TEXT
+   ========================================================= */
 editorEl.addEventListener('paste', e => {
     const text = e.clipboardData.getData('text/plain');
     if (!text) return;
     e.preventDefault();
     document.execCommand('insertText', false, text);
 });
+
+/* =========================================================
+   EVENTS
+   ========================================================= */
+newDocBtn.addEventListener('click', createDoc);
+backBtn.addEventListener('click', async () => { await saveNow(); showList(); });
+titleInput.addEventListener('input', scheduleSave);
+editorEl.addEventListener('input', scheduleSave);
 
 /* =========================================================
    PWA
@@ -1428,4 +1959,5 @@ if ('serviceWorker' in navigator) {
     await openDB();
     renderList();
     updateCollapse();
+    updateSaveAsHint();
 })();

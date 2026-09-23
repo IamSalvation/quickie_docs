@@ -96,7 +96,6 @@ body {
     align-items: center;
 }
 
-/* Search bar */
 .search-bar {
     position: relative;
     padding: 12px 20px 0;
@@ -361,7 +360,6 @@ body {
     line-height: 1;
 }
 
-/* Groups */
 .group {
     display: flex;
     flex-direction: column;
@@ -400,7 +398,6 @@ body {
     line-height: 1;
 }
 
-/* Ribbon buttons */
 .ribbon-btn {
     background: transparent;
     border: 1px solid transparent;
@@ -1144,6 +1141,111 @@ body {
     height: 1px;
     background: var(--border);
     margin: 4px 2px;
+}
+
+/* ============ SAVE AS MODAL ============ */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 400;
+    padding: 20px;
+}
+
+.modal-overlay.hidden {
+    display: none;
+}
+
+.modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    width: min(480px, 100%);
+    overflow: hidden;
+    color: var(--text);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 16px;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.modal-close:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-label {
+    display: block;
+    margin-bottom: 16px;
+}
+
+.modal-label>span {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+
+.modal-label input,
+.modal-label select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+}
+
+.modal-label input:focus,
+.modal-label select:focus {
+    border-color: var(--accent);
+    background: var(--surface);
+}
+
+.modal-hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+    line-height: 1.5;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 14px 20px;
+    background: var(--surface-2);
+    border-top: 1px solid var(--border);
 }
 
 /* ============ RESPONSIVE ============ */
