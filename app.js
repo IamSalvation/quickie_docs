@@ -1,6 +1,6 @@
 /* =========================================================
-   Quickie Docs — v1.3.0
-   Custom DOCX writer + Save As + fixed keyboard shortcuts
+   Quickie Docs — v1.4.0
+   Mobile fixes + expanded toolbar + table auto-tab
    ========================================================= */
 
 // ---------- IndexedDB ----------
@@ -14,9 +14,7 @@ function openDB() {
         const req = indexedDB.open(DB_NAME, DB_VERSION);
         req.onupgradeneeded = e => {
             const d = e.target.result;
-            if (!d.objectStoreNames.contains(STORE)) {
-                d.createObjectStore(STORE, { keyPath: 'id' });
-            }
+            if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: 'id' });
         };
         req.onsuccess = e => { db = e.target.result; resolve(db); };
         req.onerror = e => reject(e.target.error);
@@ -74,6 +72,9 @@ const tableMenu = document.getElementById('table-menu');
 const themeToggle = document.getElementById('theme-toggle');
 const themeIcon = document.getElementById('theme-icon');
 const themeLabel = document.getElementById('theme-label');
+const mobileBar = document.getElementById('mobile-bar');
+const mobileSheet = document.getElementById('mobile-sheet');
+const mobileSheetClose = document.getElementById('mobile-sheet-close');
 
 // Save As modal
 const saveAsModal = document.getElementById('save-as-modal');
@@ -84,6 +85,32 @@ const saveAsClose = document.getElementById('save-as-close');
 const saveAsCancel = document.getElementById('save-as-cancel');
 const saveAsConfirm = document.getElementById('save-as-confirm');
 
+// Prompt modal
+const promptModal = document.getElementById('prompt-modal');
+const promptTitle = document.getElementById('prompt-title');
+const promptMessage = document.getElementById('prompt-message');
+const promptInput = document.getElementById('prompt-input');
+const promptHint = document.getElementById('prompt-hint');
+const promptClose = document.getElementById('prompt-close');
+const promptCancel = document.getElementById('prompt-cancel');
+const promptConfirm = document.getElementById('prompt-confirm');
+
+// Table modal
+const tableModal = document.getElementById('table-modal');
+const tableRowsInput = document.getElementById('table-rows');
+const tableColsInput = document.getElementById('table-cols');
+const tableModalClose = document.getElementById('table-modal-close');
+const tableModalCancel = document.getElementById('table-modal-cancel');
+const tableModalConfirm = document.getElementById('table-modal-confirm');
+
+// Link modal
+const linkModal = document.getElementById('link-modal');
+const linkUrlInput = document.getElementById('link-url');
+const linkTextInput = document.getElementById('link-text');
+const linkModalClose = document.getElementById('link-modal-close');
+const linkModalCancel = document.getElementById('link-modal-cancel');
+const linkModalConfirm = document.getElementById('link-modal-confirm');
+
 // ---------- State ----------
 let currentDoc = null;
 let saveTimer = null;
@@ -92,7 +119,11 @@ let previewMode = false;
 let toastTimer = null;
 let currentSearch = '';
 let tableMenuTargetCell = null;
-const fileHandles = {};   // docId -> FileSystemFileHandle
+let savedRange = null;              // ← selection memory for mobile
+let currentFindIndex = 0;
+let findMatches = [];
+let lastFocusedElement = null;
+const fileHandles = {};
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 function formatDate(ts) {
@@ -103,6 +134,39 @@ function flashStatus(text) {
     saveStatus.textContent = text;
     setTimeout(() => { if (saveStatus.textContent === text) saveStatus.textContent = ''; }, 1500);
 }
+
+/* =========================================================
+   MOBILE DETECTION
+   ========================================================= */
+function isMobile() {
+    return window.matchMedia('(max-width: 768px)').matches;
+}
+
+/* =========================================================
+   SELECTION MEMORY (critical for mobile)
+   ========================================================= */
+function saveSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (editorEl.contains(range.commonAncestorContainer)) {
+        savedRange = range.cloneRange();
+    }
+}
+function restoreSelection() {
+    if (!savedRange) return false;
+    try {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(savedRange);
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+document.addEventListener('selectionchange', () => {
+    if (!editorView.classList.contains('hidden')) saveSelection();
+});
 
 /* =========================================================
    THEME
@@ -123,9 +187,7 @@ function toggleTheme() {
 themeToggle?.addEventListener('click', toggleTheme);
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-    if (!localStorage.getItem('quickie-theme')) {
-        applyTheme(e.matches ? 'dark' : 'light');
-    }
+    if (!localStorage.getItem('quickie-theme')) applyTheme(e.matches ? 'dark' : 'light');
 });
 
 (function initTheme() {
@@ -139,16 +201,44 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e =
    ========================================================= */
 function showToast(message, duration = 5000) {
     clearTimeout(toastTimer);
-    toastEl.innerHTML = `
-    <span>${message}</span>
-    <button class="toast-close" title="Dismiss">✕</button>
-  `;
+    toastEl.innerHTML = `<span>${message}</span><button class="toast-close" title="Dismiss">✕</button>`;
     toastEl.classList.remove('hidden');
     toastEl.querySelector('.toast-close').addEventListener('click', hideToast);
     toastTimer = setTimeout(hideToast, duration);
 }
-function hideToast() {
-    toastEl.classList.add('hidden');
+function hideToast() { toastEl.classList.add('hidden'); }
+
+/* =========================================================
+   MODAL-BASED PROMPT (replaces native prompt() for mobile)
+   ========================================================= */
+function promptModalOpen({ title = 'Input', message = 'Enter value', value = '', hint = '' } = {}) {
+    return new Promise(resolve => {
+        promptTitle.textContent = title;
+        promptMessage.textContent = message;
+        promptInput.value = value;
+        promptHint.textContent = hint;
+        promptHint.style.display = hint ? 'block' : 'none';
+        promptModal.classList.remove('hidden');
+        setTimeout(() => { promptInput.focus(); promptInput.select(); }, 40);
+
+        const cleanup = () => {
+            promptModal.classList.add('hidden');
+            promptConfirm.removeEventListener('click', onOk);
+            promptCancel.removeEventListener('click', onCancel);
+            promptClose.removeEventListener('click', onCancel);
+            promptInput.removeEventListener('keydown', onKey);
+        };
+        const onOk = () => { const v = promptInput.value; cleanup(); resolve(v); };
+        const onCancel = () => { cleanup(); resolve(null); };
+        const onKey = (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+            if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        };
+        promptConfirm.addEventListener('click', onOk);
+        promptCancel.addEventListener('click', onCancel);
+        promptClose.addEventListener('click', onCancel);
+        promptInput.addEventListener('keydown', onKey);
+    });
 }
 
 /* =========================================================
@@ -167,9 +257,7 @@ installBtn?.addEventListener('click', async () => {
     deferredInstallPrompt = null;
     installBtn.classList.add('hidden');
 });
-window.addEventListener('appinstalled', () => {
-    installBtn?.classList.add('hidden');
-});
+window.addEventListener('appinstalled', () => installBtn?.classList.add('hidden'));
 
 /* =========================================================
    COLLAPSE
@@ -178,7 +266,7 @@ const COLLAPSE_WIDTH = 900;
 const MIN_ITEMS_TO_COLLAPSE = 2;
 
 function updateCollapse() {
-    if (!ribbon) return;
+    if (!ribbon || isMobile()) return;
     const ribbonWidth = ribbon.clientWidth || window.innerWidth;
     const shouldCollapse = ribbonWidth < COLLAPSE_WIDTH;
 
@@ -201,7 +289,42 @@ ro.observe(ribbon);
 window.addEventListener('resize', updateCollapse);
 
 /* =========================================================
-   DROPDOWNS
+   RIBBON: TAB SWITCHING
+   ========================================================= */
+document.querySelectorAll('.ribbon-tabs .tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.ribbon-tabs .tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.ribbon-panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        document.querySelector(`.ribbon-panel[data-panel="${tab.dataset.tab}"]`)?.classList.add('active');
+        requestAnimationFrame(updateCollapse);
+    });
+});
+
+/* =========================================================
+   TABLE TAB AUTO-SHOW
+   ========================================================= */
+const tableTabBtn = document.getElementById('table-tab-btn');
+document.addEventListener('selectionchange', () => {
+    if (editorView.classList.contains('hidden')) return;
+    const sel = window.getSelection();
+    let node = sel.anchorNode;
+    let inTable = false;
+    while (node) {
+        if (node.nodeType === 1 && node.tagName === 'TABLE') { inTable = true; break; }
+        if (node === editorEl) break;
+        node = node.parentNode;
+    }
+    if (tableTabBtn) {
+        tableTabBtn.style.display = inTable ? '' : 'none';
+        if (!inTable && tableTabBtn.classList.contains('active')) {
+            document.querySelector('.ribbon-tabs .tab[data-tab="home"]')?.click();
+        }
+    }
+});
+
+/* =========================================================
+   RIBBON: GROUP COLLAPSED DROPDOWNS + execCommand
    ========================================================= */
 ribbon.addEventListener('click', e => {
     const collapseBtn = e.target.closest('.group-collapsed-btn');
@@ -219,13 +342,14 @@ ribbon.addEventListener('click', e => {
         e.stopPropagation();
         li.closest('.group-dropdown')?.classList.remove('open');
         if (li.dataset.targetCmd) {
-            document.execCommand(li.dataset.targetCmd, false, li.dataset.targetValue || null);
+            runCmd(li.dataset.targetCmd, li.dataset.targetValue || null);
         } else if (li.dataset.targetId) {
             document.getElementById(li.dataset.targetId)?.click();
         }
         editorEl.focus();
     }
 });
+
 document.addEventListener('click', e => {
     if (!e.target.closest('.group')) {
         document.querySelectorAll('.group-dropdown.open').forEach(d => d.classList.remove('open'));
@@ -233,6 +357,38 @@ document.addEventListener('click', e => {
     if (!e.target.closest('#table-menu') && !e.target.closest('td')) {
         tableMenu.classList.add('hidden');
     }
+});
+
+/* =========================================================
+   EXEC CMD HELPER (with selection restore)
+   ========================================================= */
+function runCmd(cmd, value = null) {
+    restoreSelection();
+    try {
+        document.execCommand('styleWithCSS', false, true);
+    } catch (_) { }
+    document.execCommand(cmd, false, value);
+    saveSelection();
+}
+
+/* =========================================================
+   RIBBON: GENERIC execCommand BUTTONS (pointerdown for mobile)
+   ========================================================= */
+function attachPointerHandler(el, handler) {
+    el.addEventListener('pointerdown', e => {
+        // Prevent focus stealing on mobile
+        e.preventDefault();
+        e.stopPropagation();
+        handler(e);
+    });
+}
+
+// All buttons with data-cmd
+document.querySelectorAll('button[data-cmd]').forEach(btn => {
+    attachPointerHandler(btn, () => {
+        runCmd(btn.dataset.cmd, btn.dataset.value || null);
+        updateToolbarState();
+    });
 });
 
 /* =========================================================
@@ -312,9 +468,7 @@ async function renderList() {
                     const start = Math.max(0, idx - 30);
                     const end = Math.min(preview.length, idx + q.length + 40);
                     snippet.textContent =
-                        (start > 0 ? '…' : '') +
-                        preview.slice(start, end) +
-                        (end < preview.length ? '…' : '');
+                        (start > 0 ? '…' : '') + preview.slice(start, end) + (end < preview.length ? '…' : '');
                 } else {
                     snippet.textContent = preview.slice(0, 80) + (preview.length > 80 ? '…' : '');
                 }
@@ -390,7 +544,7 @@ async function createDoc() {
 }
 
 /* =========================================================
-   SAVE (IndexedDB)
+   SAVE / SAVE AS
    ========================================================= */
 function scheduleSave() {
     if (!currentDoc) return;
@@ -407,97 +561,80 @@ async function saveNow() {
     flashStatus('Saved ✓');
 }
 
+function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /* =========================================================
-   CUSTOM DOCX WRITER (Path B)
-   Walks the editor DOM and emits proper OOXML with styles.xml,
-   so files round-trip cleanly back through Mammoth.
+   CUSTOM DOCX WRITER
    ========================================================= */
 function escapeXml(s) {
     return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
-// Paragraph styles we know how to write
 const PARA_STYLE_MAP = {
     H1: 'Heading1', H2: 'Heading2', H3: 'Heading3', H4: 'Heading4',
     H5: 'Heading5', H6: 'Heading6',
-    BLOCKQUOTE: 'Quote',
-    PRE: 'Code'
+    BLOCKQUOTE: 'Quote', PRE: 'Code'
 };
-
-// Convert inline CSS style string to OOXML run properties
-function cssToRunProps(el) {
-    const styles = (el.style && el.style.cssText) ? el.style : (el.getAttribute && el.getAttribute('style') ? parseStyleString(el.getAttribute('style')) : null);
-    let rPr = '';
-
-    const tag = (el.tagName || '').toLowerCase();
-
-    // Bold / italic / underline / strike
-    const isBold = tag === 'b' || tag === 'strong' || (el.style && el.style.fontWeight && /bold|[6-9]00/.test(el.style.fontWeight));
-    const isItalic = tag === 'i' || tag === 'em' || (el.style && el.style.fontStyle === 'italic');
-    const isUnderline = tag === 'u' || (el.style && el.style.textDecoration && el.style.textDecoration.includes('underline'));
-    const isStrike = tag === 's' || tag === 'strike' || tag === 'del' || (el.style && el.style.textDecoration && el.style.textDecoration.includes('line-through'));
-
-    if (isBold) rPr += '<w:b/>';
-    if (isItalic) rPr += '<w:i/>';
-    if (isUnderline) rPr += '<w:u w:val="single"/>';
-    if (isStrike) rPr += '<w:strike/>';
-
-    // Color
-    if (el.style && el.style.color) {
-        const hex = rgbToHex(el.style.color);
-        if (hex) rPr += `<w:color w:val="${hex}"/>`;
-    }
-
-    // Background (highlight)
-    if (el.style && el.style.backgroundColor) {
-        const hex = rgbToHex(el.style.backgroundColor);
-        if (hex) rPr += `<w:shd w:val="clear" w:color="auto" w:fill="${hex}"/>`;
-    }
-
-    // Font size
-    if (el.style && el.style.fontSize) {
-        const pt = pxToHalfPt(el.style.fontSize);
-        if (pt) rPr += `<w:sz w:val="${pt}"/><w:szCs w:val="${pt}"/>`;
-    }
-
-    // Font family
-    if (el.style && el.style.fontFamily) {
-        const fam = el.style.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
-        if (fam) rPr += `<w:rFonts w:ascii="${escapeXml(fam)}" w:hAnsi="${escapeXml(fam)}"/>`;
-    }
-
-    return rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
-}
 
 function parseStyleString(s) {
     const fake = document.createElement('span');
     fake.setAttribute('style', s || '');
     return fake.style;
 }
-
 function rgbToHex(rgb) {
     if (!rgb) return null;
     if (rgb.startsWith('#')) return rgb.slice(1).toUpperCase().padStart(6, '0');
     const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
     if (!m) return null;
-    const [_, r, g, b] = m;
-    const h = (n) => parseInt(n, 10).toString(16).padStart(2, '0');
-    return (h(r) + h(g) + h(b)).toUpperCase();
+    const h = n => parseInt(n, 10).toString(16).padStart(2, '0');
+    return (h(m[1]) + h(m[2]) + h(m[3])).toUpperCase();
 }
-
 function pxToHalfPt(px) {
     const n = parseFloat(px);
     if (isNaN(n)) return null;
-    // 1 pt = 1.333 px; 1 pt = 2 half-points
     return Math.round(n * 1.5);
 }
 
-// Convert a single text-containing element into <w:r> runs
+function cssToRunProps(el) {
+    const style = (el.style && el.style.cssText) ? el.style : null;
+    let rPr = '';
+    const tag = (el.tagName || '').toLowerCase();
+
+    const isBold = tag === 'b' || tag === 'strong' || (style && style.fontWeight && /bold|[6-9]00/.test(style.fontWeight));
+    const isItalic = tag === 'i' || tag === 'em' || (style && style.fontStyle === 'italic');
+    const isUnderline = tag === 'u' || (style && style.textDecoration && style.textDecoration.includes('underline'));
+    const isStrike = tag === 's' || tag === 'strike' || tag === 'del' || (style && style.textDecoration && style.textDecoration.includes('line-through'));
+
+    if (isBold) rPr += '<w:b/>';
+    if (isItalic) rPr += '<w:i/>';
+    if (isUnderline) rPr += '<w:u w:val="single"/>';
+    if (isStrike) rPr += '<w:strike/>';
+    if (style && style.color) {
+        const hex = rgbToHex(style.color);
+        if (hex) rPr += `<w:color w:val="${hex}"/>`;
+    }
+    if (style && style.backgroundColor) {
+        const hex = rgbToHex(style.backgroundColor);
+        if (hex) rPr += `<w:shd w:val="clear" w:color="auto" w:fill="${hex}"/>`;
+    }
+    if (style && style.fontSize) {
+        const pt = pxToHalfPt(style.fontSize);
+        if (pt) rPr += `<w:sz w:val="${pt}"/><w:szCs w:val="${pt}"/>`;
+    }
+    if (style && style.fontFamily) {
+        const fam = style.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+        if (fam) rPr += `<w:rFonts w:ascii="${escapeXml(fam)}" w:hAnsi="${escapeXml(fam)}"/>`;
+    }
+    return rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
+}
+
 function elementToRuns(node, inheritedRPr = '') {
     if (node.nodeType === 3) {
         const text = node.textContent;
@@ -505,61 +642,43 @@ function elementToRuns(node, inheritedRPr = '') {
         return `<w:r>${inheritedRPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
     }
     if (node.nodeType !== 1) return '';
-
     const tag = node.tagName.toLowerCase();
-
-    // Skip style-only wrappers we don't care about
-    if (tag === 'br') {
-        return `<w:r>${inheritedRPr}<w:br/></w:r>`;
-    }
-
-    // Anchors → hyperlink runs (simplified: write as plain text with underline + color)
+    if (tag === 'br') return `<w:r>${inheritedRPr}<w:br/></w:r>`;
     if (tag === 'a') {
         const text = node.textContent || node.href;
         const rPr = `<w:rPr><w:color w:val="2B7FFF"/><w:u w:val="single"/></w:rPr>`;
         return `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
     }
-
-    // Images — write as inline text placeholder (images are complex in OOXML)
     if (tag === 'img') {
         const alt = node.getAttribute('alt') || 'image';
         return `<w:r>${inheritedRPr}<w:t xml:space="preserve">[${escapeXml(alt)}]</w:t></w:r>`;
     }
-
-    // Merge this element's inline styles with inherited
+    if (tag === 'input' && node.type === 'checkbox') {
+        const mark = node.checked ? '☑' : '☐';
+        return `<w:r>${inheritedRPr}<w:t xml:space="preserve">${mark} </w:t></w:r>`;
+    }
     const ownRPr = cssToRunProps(node);
     const mergedRPr = ownRPr || inheritedRPr;
-
     let out = '';
-    for (const child of node.childNodes) {
-        out += elementToRuns(child, mergedRPr);
-    }
+    for (const child of node.childNodes) out += elementToRuns(child, mergedRPr);
     return out;
 }
 
-// Convert a paragraph-like element into <w:p>
 function elementToParagraph(el) {
     const tag = el.tagName ? el.tagName.toUpperCase() : '';
     const styleId = PARA_STYLE_MAP[tag];
-
     let pPr = '';
-    if (styleId) {
-        pPr += `<w:pStyle w:val="${styleId}"/>`;
-    }
-
-    // Text alignment
+    if (styleId) pPr += `<w:pStyle w:val="${styleId}"/>`;
     if (el.style && el.style.textAlign) {
         const map = { left: 'left', right: 'right', center: 'center', justify: 'both' };
         const jc = map[el.style.textAlign];
         if (jc) pPr += `<w:jc w:val="${jc}"/>`;
     }
-
     const runs = elementToRuns(el, '');
     const pPrXml = pPr ? `<w:pPr>${pPr}</w:pPr>` : '';
     return `<w:p>${pPrXml}${runs}</w:p>`;
 }
 
-// Convert a list (ul/ol) into a sequence of <w:p> with numbering
 function listToListParagraphs(list) {
     const isOrdered = list.tagName.toLowerCase() === 'ol';
     const items = Array.from(list.children).filter(c => c.tagName.toLowerCase() === 'li');
@@ -574,11 +693,9 @@ function listToListParagraphs(list) {
     return out;
 }
 
-// Convert a table into <w:tbl>
 function tableToOoxml(table) {
     const rows = Array.from(table.rows);
     if (!rows.length) return '';
-
     let out = '<w:tbl>';
     out += `<w:tblPr>
     <w:tblStyle w:val="TableGrid"/>
@@ -592,7 +709,6 @@ function tableToOoxml(table) {
       <w:insideV w:val="single" w:sz="4" w:color="auto"/>
     </w:tblBorders>
   </w:tblPr>`;
-
     for (const row of rows) {
         out += '<w:tr>';
         for (const cell of row.cells) {
@@ -605,43 +721,26 @@ function tableToOoxml(table) {
     return out;
 }
 
-// Walk editor children and produce the body content
 function buildDocumentBody(rootEl) {
     let out = '';
-    const children = Array.from(rootEl.childNodes);
-
-    for (const node of children) {
+    for (const node of Array.from(rootEl.childNodes)) {
         if (node.nodeType === 3) {
             const text = node.textContent.trim();
-            if (text) {
-                out += `<w:p><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
-            }
+            if (text) out += `<w:p><w:r><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
             continue;
         }
         if (node.nodeType !== 1) continue;
-
         const tag = node.tagName.toLowerCase();
-
-        if (tag === 'ul' || tag === 'ol') {
-            out += listToListParagraphs(node);
-        } else if (tag === 'table') {
-            out += tableToOoxml(node);
-        } else if (tag === 'hr') {
-            out += `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:color="888888"/></w:pBdr></w:pPr></w:p>`;
-        } else if (tag === 'div' || tag === 'section' || tag === 'article') {
-            out += buildDocumentBody(node);
-        } else {
-            out += elementToParagraph(node);
-        }
+        if (tag === 'ul' || tag === 'ol') out += listToListParagraphs(node);
+        else if (tag === 'table') out += tableToOoxml(node);
+        else if (tag === 'hr') out += `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:color="888888"/></w:pBdr></w:pPr></w:p>`;
+        else if (tag === 'div' || tag === 'section' || tag === 'article') out += buildDocumentBody(node);
+        else out += elementToParagraph(node);
     }
-
-    if (!out.trim()) {
-        out = '<w:p/>';
-    }
+    if (!out.trim()) out = '<w:p/>';
     return out;
 }
 
-// ---- Static OOXML side files ----
 function buildContentTypes() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -654,7 +753,6 @@ function buildContentTypes() {
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
 </Types>`;
 }
-
 function buildRels() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -663,7 +761,6 @@ function buildRels() {
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
 </Relationships>`;
 }
-
 function buildDocumentRels() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -671,78 +768,34 @@ function buildDocumentRels() {
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
 </Relationships>`;
 }
-
 function buildStylesXml() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:docDefaults>
-    <w:rPrDefault>
-      <w:rPr>
-        <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>
-        <w:sz w:val="22"/><w:szCs w:val="22"/>
-      </w:rPr>
-    </w:rPrDefault>
-  </w:docDefaults>
-
-  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
-    <w:name w:val="Normal"/><w:qFormat/>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="Heading1">
-    <w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
-    <w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="240" w:after="120"/></w:pPr>
-    <w:rPr><w:b/><w:sz w:val="36"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Heading2">
-    <w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
-    <w:pPr><w:outlineLvl w:val="1"/><w:spacing w:before="200" w:after="100"/></w:pPr>
-    <w:rPr><w:b/><w:sz w:val="28"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Heading3">
-    <w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
-    <w:pPr><w:outlineLvl w:val="2"/></w:pPr>
-    <w:rPr><w:b/><w:sz w:val="24"/></w:rPr>
-  </w:style>
-  <w:style w:type="paragraph" w:styleId="Heading4">
-    <w:name w:val="heading 4"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
-    <w:pPr><w:outlineLvl w:val="3"/></w:pPr>
-    <w:rPr><w:b/><w:i/><w:sz w:val="22"/></w:rPr>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="Quote">
-    <w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
-    <w:pPr><w:ind w:left="720"/><w:pBdr><w:left w:val="single" w:sz="12" w:color="2B7FFF"/></w:pBdr></w:pPr>
-    <w:rPr><w:i/><w:color w:val="555555"/></w:rPr>
-  </w:style>
-
-  <w:style w:type="paragraph" w:styleId="Code">
-    <w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>
-    <w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:sz w:val="20"/></w:rPr>
-  </w:style>
+  <w:docDefaults><w:rPrDefault><w:rPr>
+    <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>
+    <w:sz w:val="22"/><w:szCs w:val="22"/>
+  </w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="0"/><w:spacing w:before="240" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="2"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:ind w:left="720"/><w:pBdr><w:left w:val="single" w:sz="12" w:color="2B7FFF"/></w:pBdr></w:pPr><w:rPr><w:i/><w:color w:val="555555"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Code"><w:name w:val="Code"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:sz w:val="20"/></w:rPr></w:style>
 </w:styles>`;
 }
-
 function buildNumberingXml() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:abstractNum w:abstractNumId="0">
-    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/></w:lvl>
-  </w:abstractNum>
-  <w:abstractNum w:abstractNumId="1">
-    <w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/></w:lvl>
-  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/></w:lvl></w:abstractNum>
+  <w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/></w:lvl></w:abstractNum>
   <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
   <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
 </w:numbering>`;
 }
-
 function buildCoreXml(title) {
     const now = new Date().toISOString();
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
-  xmlns:dc="http://purl.org/dc/elements/1.1/"
-  xmlns:dcterms="http://purl.org/dc/terms/"
-  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <dc:title>${escapeXml(title)}</dc:title>
   <dc:creator>Quickie Docs</dc:creator>
   <cp:lastModifiedBy>Quickie Docs</cp:lastModifiedBy>
@@ -750,38 +803,23 @@ function buildCoreXml(title) {
   <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
 </cp:coreProperties>`;
 }
-
 function buildAppXml() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
-  <Application>Quickie Docs</Application>
-</Properties>`;
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Quickie Docs</Application></Properties>`;
 }
 
-// Top-level: generate a real .docx Blob
 async function generateDocxBlob(title, editorHtml) {
-    if (!window.JSZip) {
-        throw new Error('JSZip not loaded — cannot generate DOCX.');
-    }
-
-    // Parse the editor HTML into a temp DOM so we can walk it
+    if (!window.JSZip) throw new Error('JSZip not loaded.');
     const temp = document.createElement('div');
     temp.innerHTML = editorHtml || '';
-
     const bodyXml = buildDocumentBody(temp);
-
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>
     ${bodyXml}
-    <w:sectPr>
-      <w:pgSz w:w="12240" w:h="15840"/>
-      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
-    </w:sectPr>
+    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
   </w:body>
 </w:document>`;
-
     const zip = new window.JSZip();
     zip.file('[Content_Types].xml', buildContentTypes());
     zip.folder('_rels').file('.rels', buildRels());
@@ -793,7 +831,6 @@ async function generateDocxBlob(title, editorHtml) {
     const props = zip.folder('docProps');
     props.file('core.xml', buildCoreXml(title));
     props.file('app.xml', buildAppXml());
-
     return await zip.generateAsync({
         type: 'blob',
         mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -802,7 +839,7 @@ async function generateDocxBlob(title, editorHtml) {
 }
 
 /* =========================================================
-   SAVE AS — Format generators
+   FORMAT BUILDERS
    ========================================================= */
 function buildHtmlBlob(title) {
     const html = `<!DOCTYPE html>
@@ -811,29 +848,20 @@ function buildHtmlBlob(title) {
 </head><body>${editorEl.innerHTML}</body></html>`;
     return new Blob([html], { type: 'text/html' });
 }
-
 function buildTxtBlob() {
-    const text = editorEl.innerText || '';
-    return new Blob([text], { type: 'text/plain' });
+    return new Blob([editorEl.innerText || ''], { type: 'text/plain' });
 }
-
 function buildMdBlob() {
-    const html = editorEl.innerHTML || '';
-    const md = htmlToMarkdown(html);
-    return new Blob([md], { type: 'text/markdown' });
+    return new Blob([htmlToMarkdown(editorEl.innerHTML || '')], { type: 'text/markdown' });
 }
-
 function htmlToMarkdown(html) {
     const temp = document.createElement('div');
     temp.innerHTML = html;
-
     function walk(node) {
         if (node.nodeType === 3) return node.textContent;
         if (node.nodeType !== 1) return '';
-
         const tag = node.tagName.toLowerCase();
         const inner = Array.from(node.childNodes).map(walk).join('');
-
         switch (tag) {
             case 'h1': return `\n# ${inner.trim()}\n\n`;
             case 'h2': return `\n## ${inner.trim()}\n\n`;
@@ -847,10 +875,7 @@ function htmlToMarkdown(html) {
             case 'em': case 'i': return `*${inner}*`;
             case 'u': return `<u>${inner}</u>`;
             case 's': case 'strike': case 'del': return `~~${inner}~~`;
-            case 'a': {
-                const href = node.getAttribute('href') || '#';
-                return `[${inner}](${href})`;
-            }
+            case 'a': return `[${inner}](${node.getAttribute('href') || '#'})`;
             case 'code': return `\`${inner}\``;
             case 'pre': return `\n\`\`\`\n${node.textContent}\n\`\`\`\n\n`;
             case 'blockquote': return `\n> ${inner.trim().replace(/\n/g, '\n> ')}\n\n`;
@@ -858,31 +883,15 @@ function htmlToMarkdown(html) {
             case 'ol': return '\n' + Array.from(node.children).map((li, i) => `${i + 1}. ${walk(li).trim()}`).join('\n') + '\n\n';
             case 'li': return inner;
             case 'hr': return `\n---\n\n`;
-            case 'img': {
-                const alt = node.getAttribute('alt') || 'image';
-                const src = node.getAttribute('src') || '';
-                return `![${alt}](${src})`;
-            }
-            case 'table': {
-                const rows = Array.from(node.rows);
-                if (!rows.length) return '';
-                let md = '\n';
-                rows.forEach((row, ri) => {
-                    const cells = Array.from(row.cells).map(c => c.textContent.trim());
-                    md += '| ' + cells.join(' | ') + ' |\n';
-                    if (ri === 0) md += '|' + cells.map(() => ' --- ').join('|') + '|\n';
-                });
-                return md + '\n';
-            }
+            case 'img': return `![${node.getAttribute('alt') || 'image'}](${node.getAttribute('src') || ''})`;
             default: return inner;
         }
     }
-
     return walk(temp).replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
 
 /* =========================================================
-   SAVE AS — File System Access + fallback
+   SAVE AS
    ========================================================= */
 async function getBlobForType(type, title) {
     switch (type) {
@@ -890,70 +899,52 @@ async function getBlobForType(type, title) {
         case 'html': return buildHtmlBlob(title);
         case 'txt': return buildTxtBlob();
         case 'md': return buildMdBlob();
-        default: throw new Error('Unknown format: ' + type);
+        default: throw new Error('Unknown format');
     }
 }
-
 function getMimeAndExt(type) {
     switch (type) {
-        case 'docx': return {
-            mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            ext: '.docx',
-            description: 'Word Document'
-        };
+        case 'docx': return { mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', ext: '.docx', description: 'Word Document' };
         case 'html': return { mime: 'text/html', ext: '.html', description: 'Web Page' };
         case 'txt': return { mime: 'text/plain', ext: '.txt', description: 'Plain Text' };
         case 'md': return { mime: 'text/markdown', ext: '.md', description: 'Markdown' };
     }
 }
-
 async function performSaveAs(type, filename) {
     if (!currentDoc) return;
     const { mime, ext, description } = getMimeAndExt(type);
     const finalName = (filename || currentDoc.title || 'Untitled').trim() + ext;
 
     let blob;
-    try {
-        blob = await getBlobForType(type, filename);
-    } catch (err) {
-        console.error('Save As failed to build file:', err);
-        showToast('Could not generate the file. Please try a different format.');
+    try { blob = await getBlobForType(type, filename); }
+    catch (err) {
+        console.error('Save As failed:', err);
+        showToast('Could not generate file. Try a different format.');
         return;
     }
 
-    // Try File System Access API first (Chrome / Edge)
     if (window.showSaveFilePicker) {
         try {
             const handle = await window.showSaveFilePicker({
                 suggestedName: finalName,
-                types: [{
-                    description,
-                    accept: { [mime]: [ext] }
-                }]
+                types: [{ description, accept: { [mime]: [ext] } }]
             });
             const writable = await handle.createWritable();
             await writable.write(blob);
             await writable.close();
-
-            // Remember handle so next Save As points to same file
             if (currentDoc) fileHandles[currentDoc.id] = handle;
-
             showToast(`Saved as ${handle.name}`);
             return;
         } catch (err) {
-            if (err.name === 'AbortError') return;   // user cancelled
-            console.warn('showSaveFilePicker failed, falling back to download:', err);
+            if (err.name === 'AbortError') return;
+            console.warn('showSaveFilePicker failed:', err);
         }
     }
 
-    // Fallback: standard download
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = finalName;
-    a.click();
+    a.href = url; a.download = finalName; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-
     showToast(`Downloaded ${finalName}`);
 }
 
@@ -965,23 +956,19 @@ function openSaveAsModal() {
     saveAsModal.classList.remove('hidden');
     setTimeout(() => { saveAsName.focus(); saveAsName.select(); }, 40);
 }
-
 function updateSaveAsHint() {
-    const t = saveAsType.value;
     if (window.showSaveFilePicker) {
         saveAsHint.textContent = 'Your browser will open a Save dialog where you can pick the folder.';
     } else {
-        saveAsHint.textContent = 'Your browser does not support folder selection — the file will be downloaded to your Downloads folder.';
+        saveAsHint.textContent = 'Your browser will download the file to your Downloads folder.';
     }
 }
-
 async function confirmSaveAs() {
     const name = saveAsName.value.trim() || 'Untitled';
     const type = saveAsType.value;
     saveAsModal.classList.add('hidden');
     await performSaveAs(type, name);
 }
-
 saveAsBtn?.addEventListener('click', openSaveAsModal);
 saveAsClose?.addEventListener('click', () => saveAsModal.classList.add('hidden'));
 saveAsCancel?.addEventListener('click', () => saveAsModal.classList.add('hidden'));
@@ -992,7 +979,7 @@ saveAsModal?.addEventListener('click', e => {
 });
 
 /* =========================================================
-   IMPORT (with plain-text fallback for broken round-trips)
+   IMPORT
    ========================================================= */
 function pickAndImport() {
     const input = document.createElement('input');
@@ -1004,89 +991,53 @@ function pickAndImport() {
     };
     input.click();
 }
-
 function importFile(file) {
     const ext = file.name.split('.').pop().toLowerCase();
     switch (ext) {
         case 'docx': return importDOCX(file);
-        case 'html':
-        case 'htm': return importHTML(file);
+        case 'html': case 'htm': return importHTML(file);
         case 'txt': return importTXT(file);
-        case 'md':
-        case 'markdown': return importMarkdown(file);
-        default:
-            alert('Unsupported file type: .' + ext);
+        case 'md': case 'markdown': return importMarkdown(file);
+        default: alert('Unsupported file type: .' + ext);
     }
 }
-
 function importDOCX(file) {
     if (typeof window.mammoth === 'undefined') {
-        alert('DOCX import library not loaded (offline?). Try again when online.');
+        alert('DOCX import library not loaded.');
         return;
     }
     const reader = new FileReader();
     reader.onload = async e => {
-        const arrayBuffer = e.target.result;
         try {
             const result = await window.mammoth.convertToHtml(
-                { arrayBuffer },
+                { arrayBuffer: e.target.result },
                 {
                     styleMap: [
-                        "p[style-name='Title'] => h1",
-                        "p[style-name='Subtitle'] => h2",
-                        "p[style-name='heading 1'] => h1",
-                        "p[style-name='heading 2'] => h2",
-                        "p[style-name='heading 3'] => h3",
-                        "p[style-name='heading 4'] => h4",
-                        "p[style-name='Quote'] => blockquote",
-                        "p[style-name='Intense Quote'] => blockquote",
-                        "p[style-name='Code'] => pre",
-                        "b => strong",
-                        "i => em",
+                        "p[style-name='Title'] => h1", "p[style-name='Subtitle'] => h2",
+                        "p[style-name='heading 1'] => h1", "p[style-name='heading 2'] => h2",
+                        "p[style-name='heading 3'] => h3", "p[style-name='heading 4'] => h4",
+                        "p[style-name='Quote'] => blockquote", "p[style-name='Code'] => pre",
+                        "b => strong", "i => em"
                     ],
-                    convertImage: window.mammoth.images.imgElement(img => {
-                        return img.read('base64').then(b64 => ({
-                            src: 'data:' + img.contentType + ';base64,' + b64
-                        }));
-                    })
+                    convertImage: window.mammoth.images.imgElement(img =>
+                        img.read('base64').then(b64 => ({ src: 'data:' + img.contentType + ';base64,' + b64 }))
+                    )
                 }
             );
-
             let html = (result.value || '').trim();
-
-            // Fallback: Mammoth silently returned empty (common for our own exports)
-            if (!html || /^<p>\s*<\/p>$/.test(html) || html === '<p></p>') {
-                console.warn('Mammoth returned empty HTML. Trying raw text extraction…');
-                html = await extractPlainTextFromDocx(arrayBuffer);
-                if (html) {
-                    showToast('Imported as plain text — some formatting may be lost.');
-                }
+            if (!html || /^<p>\s*<\/p>$/.test(html)) {
+                html = await extractPlainTextFromDocx(e.target.result);
+                if (html) showToast('Imported as plain text.');
             }
-
-            if (!html) {
-                alert('This DOCX file could not be read. It may be empty or corrupted.');
-                return;
-            }
-
-            if (!/<\w+/.test(html)) {
-                html = html.split(/\n{2,}/)
-                    .map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`)
-                    .join('');
-            }
-
+            if (!html) { alert('This DOCX could not be read.'); return; }
             await createImportedDoc(file.name, html);
-
-            if (result.messages?.length) {
-                console.info('Mammoth warnings:', result.messages);
-            }
         } catch (err) {
             console.error('DOCX import failed:', err);
-            alert('Failed to import DOCX. The file may be corrupted.');
+            alert('Failed to import DOCX.');
         }
     };
     reader.readAsArrayBuffer(file);
 }
-
 async function extractPlainTextFromDocx(arrayBuffer) {
     try {
         if (!window.JSZip) return '';
@@ -1094,8 +1045,7 @@ async function extractPlainTextFromDocx(arrayBuffer) {
         const docXmlFile = zip.file('word/document.xml');
         if (!docXmlFile) return '';
         const xml = await docXmlFile.async('string');
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(xml, 'application/xml');
+        const doc = new DOMParser().parseFromString(xml, 'application/xml');
         const paragraphs = doc.getElementsByTagNameNS('*', 'p');
         const lines = [];
         for (const p of paragraphs) {
@@ -1106,42 +1056,35 @@ async function extractPlainTextFromDocx(arrayBuffer) {
         }
         const text = lines.join('\n').trim();
         if (!text) return '';
-        return text.split(/\n{2,}/)
-            .map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`)
-            .join('');
+        return text.split(/\n{2,}/).map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`).join('');
     } catch (err) {
-        console.error('Raw DOCX text extraction failed:', err);
+        console.error('Raw extraction failed:', err);
         return '';
     }
 }
-
 function importHTML(file) {
     const reader = new FileReader();
     reader.onload = async e => {
         const text = e.target.result;
         const bodyMatch = text.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-        const html = bodyMatch ? bodyMatch[1] : text;
-        await createImportedDoc(file.name, html);
+        await createImportedDoc(file.name, bodyMatch ? bodyMatch[1] : text);
     };
     reader.readAsText(file);
 }
 function importTXT(file) {
     const reader = new FileReader();
     reader.onload = async e => {
-        const text = e.target.result;
-        const html = text.split(/\n{2,}/)
+        const html = e.target.result.split(/\n{2,}/)
             .map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`)
             .join('') || '<p></p>';
         await createImportedDoc(file.name, html);
-        showToast('TXT imported as plain paragraphs.');
     };
     reader.readAsText(file);
 }
 function importMarkdown(file) {
     const reader = new FileReader();
     reader.onload = async e => {
-        const html = markdownToHTML(e.target.result);
-        await createImportedDoc(file.name, html);
+        await createImportedDoc(file.name, markdownToHTML(e.target.result));
     };
     reader.readAsText(file);
 }
@@ -1157,7 +1100,6 @@ function markdownToHTML(md) {
     html = html.replace(/^# (.*)$/gm, '<h1>$1</h1>');
     html = html.replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>');
     html = html.replace(/^---+$/gm, '<hr>');
-    html = html.replace(/^\*\*\*+$/gm, '<hr>');
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
@@ -1165,14 +1107,6 @@ function markdownToHTML(md) {
     html = html.replace(/~~(.+?)~~/g, '<s>$1</s>');
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    html = html.replace(/(?:^|\n)((?:[-*+] .*(?:\n|$))+)/g, (m, b) => {
-        const items = b.trim().split(/\n/).map(l => l.replace(/^[-*+] /, '').trim()).filter(Boolean).map(t => `<li>${t}</li>`).join('');
-        return `\n<ul>${items}</ul>\n`;
-    });
-    html = html.replace(/(?:^|\n)((?:\d+\. .*(?:\n|$))+)/g, (m, b) => {
-        const items = b.trim().split(/\n/).map(l => l.replace(/^\d+\. /, '').trim()).filter(Boolean).map(t => `<li>${t}</li>`).join('');
-        return `\n<ol>${items}</ol>\n`;
-    });
     const blocks = html.split(/\n{2,}/).map(b => {
         const t = b.trim();
         if (!t) return '';
@@ -1192,15 +1126,9 @@ async function createImportedDoc(filename, html) {
     await openDoc(doc.id);
     flashStatus('Imported ✓');
 }
-
 importBtn?.addEventListener('click', pickAndImport);
-
-['dragenter', 'dragover'].forEach(ev => {
-    docList.addEventListener(ev, e => { e.preventDefault(); docList.classList.add('drag-over'); });
-});
-['dragleave', 'drop'].forEach(ev => {
-    docList.addEventListener(ev, e => { e.preventDefault(); docList.classList.remove('drag-over'); });
-});
+['dragenter', 'dragover'].forEach(ev => docList.addEventListener(ev, e => { e.preventDefault(); docList.classList.add('drag-over'); }));
+['dragleave', 'drop'].forEach(ev => docList.addEventListener(ev, e => { e.preventDefault(); docList.classList.remove('drag-over'); }));
 docList.addEventListener('drop', e => {
     const file = e.dataTransfer.files?.[0];
     if (file) importFile(file);
@@ -1212,61 +1140,49 @@ docList.addEventListener('drop', e => {
 function printDoc() {
     if (!currentDoc) return;
     const w = window.open('', '_blank');
-    w.document.write(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${titleInput.value || 'Untitled'}</title>
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${titleInput.value || 'Untitled'}</title>
 <style>
   @page { size: A4; margin: 1in; }
-  * { box-sizing: border-box; }
-  body { font-family: Georgia, 'Times New Roman', serif; font-size: 12pt; line-height: 1.6; color: #1f2328; margin: 0; padding: 0; }
-  h1 { font-size: 22pt; margin: 0 0 12pt; page-break-after: avoid; }
-  h2 { font-size: 16pt; margin: 18pt 0 8pt; page-break-after: avoid; }
-  h3 { font-size: 13pt; margin: 14pt 0 6pt; page-break-after: avoid; }
-  p { margin: 0 0 10pt; orphans: 3; widows: 3; }
+  body { font-family: Georgia, 'Times New Roman', serif; font-size: 12pt; line-height: 1.6; color: #1f2328; margin: 0; }
+  h1 { font-size: 22pt; } h2 { font-size: 16pt; } h3 { font-size: 13pt; }
+  p { margin: 0 0 10pt; }
   ul, ol { margin: 0 0 10pt 22pt; }
   blockquote { border-left: 3pt solid #2b7fff; padding-left: 12pt; color: #4a5568; font-style: italic; }
-  pre { background: #f3f4f6; padding: 10pt; border-radius: 4pt; font-family: 'Courier New', monospace; font-size: 10pt; white-space: pre-wrap; }
+  pre { background: #f3f4f6; padding: 10pt; border-radius: 4pt; font-family: 'Courier New', monospace; font-size: 10pt; }
   a { color: #2b7fff; text-decoration: underline; }
   img { max-width: 100%; height: auto; }
   table { border-collapse: collapse; width: 100%; }
   td { border: 1pt solid #cbd5e1; padding: 6pt 8pt; }
   hr { border: none; border-top: 1pt solid #cbd5e1; margin: 16pt 0; }
-  hr.page-break { page-break-after: always; border: none; height: 0; margin: 0; }
-</style>
-</head><body>${editorEl.innerHTML}</body></html>`);
+  hr.page-break { page-break-after: always; border: none; height: 0; }
+</style></head><body>${editorEl.innerHTML}</body></html>`);
     w.document.close(); w.focus();
     setTimeout(() => { w.print(); }, 400);
 }
 
 /* =========================================================
-   TAB SWITCHING
+   TOOLBAR STATE
    ========================================================= */
-document.querySelectorAll('.ribbon-tabs .tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-        document.querySelectorAll('.ribbon-tabs .tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.ribbon-panel').forEach(p => p.classList.remove('active'));
-        tab.classList.add('active');
-        document.querySelector(`.ribbon-panel[data-panel="${tab.dataset.tab}"]`)?.classList.add('active');
-        requestAnimationFrame(updateCollapse);
-    });
-});
-
-/* =========================================================
-   RIBBON execCommand BUTTONS
-   ========================================================= */
-ribbon.addEventListener('click', e => {
-    const btn = e.target.closest('button[data-cmd]');
-    if (!btn) return;
-    if (e.defaultPrevented) return;
-    document.execCommand(btn.dataset.cmd, false, btn.dataset.value || null);
-    editorEl.focus();
+function updateToolbarState() {
+    ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript',
+        'insertUnorderedList', 'insertOrderedList',
+        'justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull'].forEach(cmd => {
+            let active = false;
+            try { active = document.queryCommandState(cmd); } catch (_) { }
+            document.querySelectorAll(`[data-cmd="${cmd}"]`).forEach(btn => btn.classList.toggle('active', active));
+            document.querySelectorAll(`[data-mb="${cmd}"]`).forEach(btn => btn.classList.toggle('active', active));
+        });
+}
+document.addEventListener('selectionchange', () => {
+    if (!editorView.classList.contains('hidden')) updateToolbarState();
 });
 
 /* =========================================================
    FONT CONTROLS
    ========================================================= */
 function applyFontName(family) {
-    if (family === 'default') { document.execCommand('removeFormat'); return; }
-    document.execCommand('fontName', false, family);
+    if (family === 'default') { runCmd('removeFormat'); return; }
+    runCmd('fontName', family);
 }
 function applyFontSize(px) {
     const sel = window.getSelection();
@@ -1297,11 +1213,67 @@ function applyFontSize(px) {
 function bindFontControls(familyId, sizeId) {
     const fam = document.getElementById(familyId);
     const size = document.getElementById(sizeId);
-    if (fam) fam.addEventListener('change', e => { applyFontName(e.target.value); scheduleSave(); editorEl.focus(); });
-    if (size) size.addEventListener('change', e => { applyFontSize(parseInt(e.target.value, 10)); scheduleSave(); editorEl.focus(); });
+    if (fam) fam.addEventListener('change', e => { applyFontName(e.target.value); scheduleSave(); });
+    if (size) size.addEventListener('change', e => { applyFontSize(parseInt(e.target.value, 10)); scheduleSave(); });
 }
 bindFontControls('font-family', 'font-size');
 bindFontControls('font-family-compact', 'font-size-compact');
+
+// Font size +/- buttons
+document.getElementById('font-size-up')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const sel = document.getElementById('font-size');
+    const idx = sel.selectedIndex;
+    if (idx < sel.options.length - 1) {
+        sel.selectedIndex = idx + 1;
+        applyFontSize(parseInt(sel.value, 10));
+        scheduleSave();
+    }
+});
+document.getElementById('font-size-down')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const sel = document.getElementById('font-size');
+    const idx = sel.selectedIndex;
+    if (idx > 0) {
+        sel.selectedIndex = idx - 1;
+        applyFontSize(parseInt(sel.value, 10));
+        scheduleSave();
+    }
+});
+
+/* =========================================================
+   TEXT CASE
+   ========================================================= */
+document.getElementById('text-case-btn')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const sel = window.getSelection();
+    if (!sel.rangeCount || sel.isCollapsed) {
+        showToast('Select some text first.', 2000);
+        return;
+    }
+    const current = sel.toString();
+    const choice = await promptModalOpen({
+        title: 'Change Case',
+        message: 'Type: upper / lower / title / sentence',
+        value: 'upper',
+        hint: 'upper, lower, title, sentence'
+    });
+    if (!choice) return;
+    let next = current;
+    switch (choice.toLowerCase()) {
+        case 'upper': next = current.toUpperCase(); break;
+        case 'lower': next = current.toLowerCase(); break;
+        case 'title':
+            next = current.replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase());
+            break;
+        case 'sentence':
+            next = current.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase());
+            break;
+        default: return;
+    }
+    runCmd('insertText', next);
+    scheduleSave();
+});
 
 /* =========================================================
    COLOR PICKERS
@@ -1319,7 +1291,8 @@ function buildColorGrids() {
             b.type = 'button';
             b.style.background = color;
             b.title = color;
-            b.addEventListener('click', e => {
+            b.addEventListener('pointerdown', e => {
+                e.preventDefault();
                 e.stopPropagation();
                 applyColor(kind === 'text' ? 'foreColor' : 'hiliteColor', color);
                 closeAllColorMenus();
@@ -1329,11 +1302,12 @@ function buildColorGrids() {
     });
 }
 function applyColor(command, color) {
+    restoreSelection();
     document.execCommand('styleWithCSS', false, true);
     document.execCommand(command, false, color);
     updateColorSwatches(command, color);
+    saveSelection();
     scheduleSave();
-    editorEl.focus();
 }
 function updateColorSwatches(command, color) {
     const picker = document.querySelector(
@@ -1355,30 +1329,32 @@ function initColorPickers() {
         const menu = picker.querySelector('.color-menu');
         const native = picker.querySelector('input[type="color"]');
         const customBtn = picker.querySelector('.color-custom');
-        mainBtn?.addEventListener('click', e => {
-            e.stopPropagation();
+        mainBtn?.addEventListener('pointerdown', e => {
+            e.preventDefault();
             const current = picker.querySelector('.color-letter').style.borderBottomColor || '#1f2328';
             applyColor(command, current);
         });
-        caret?.addEventListener('click', e => {
-            e.stopPropagation();
+        caret?.addEventListener('pointerdown', e => {
+            e.preventDefault();
             const wasHidden = menu.classList.contains('hidden');
             closeAllColorMenus();
             if (wasHidden) menu.classList.remove('hidden');
         });
-        customBtn?.addEventListener('click', e => { e.stopPropagation(); native.click(); });
+        customBtn?.addEventListener('pointerdown', e => { e.preventDefault(); native.click(); });
         native?.addEventListener('input', e => { applyColor(command, e.target.value); closeAllColorMenus(); });
-        menu?.addEventListener('click', e => e.stopPropagation());
+        menu?.addEventListener('pointerdown', e => e.stopPropagation());
     });
-    document.addEventListener('click', () => closeAllColorMenus());
+    document.addEventListener('pointerdown', () => closeAllColorMenus());
 }
 initColorPickers();
 
 /* =========================================================
-   CLEAR / LINE HEIGHT / getSelectedBlocks
+   CLEAR / LINE HEIGHT
    ========================================================= */
-document.getElementById('clear-format')?.addEventListener('click', () => {
-    document.execCommand('removeFormat'); scheduleSave(); editorEl.focus();
+document.getElementById('clear-format')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    runCmd('removeFormat');
+    scheduleSave();
 });
 document.getElementById('line-height')?.addEventListener('change', e => {
     const val = e.target.value;
@@ -1402,20 +1378,148 @@ function getSelectedBlocks() {
 /* =========================================================
    INSERT HELPERS
    ========================================================= */
-document.getElementById('insert-link')?.addEventListener('click', () => {
-    const sel = window.getSelection();
-    const existing = sel.toString();
-    const url = prompt('Enter URL (https://...)', 'https://');
-    if (!url) return;
-    if (existing) document.execCommand('createLink', false, url);
-    else {
-        const label = prompt('Link text?', url);
-        if (!label) return;
-        document.execCommand('insertHTML', false, `<a href="${url}" target="_blank" rel="noopener">${label}</a>`);
-    }
-    scheduleSave(); editorEl.focus();
+document.getElementById('insert-link')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    linkUrlInput.value = 'https://';
+    linkTextInput.value = window.getSelection().toString() || '';
+    linkModal.classList.remove('hidden');
+    setTimeout(() => linkUrlInput.focus(), 40);
 });
 
+linkModalClose?.addEventListener('click', () => linkModal.classList.add('hidden'));
+linkModalCancel?.addEventListener('click', () => linkModal.classList.add('hidden'));
+linkModalConfirm?.addEventListener('click', () => {
+    const url = linkUrlInput.value.trim();
+    const label = linkTextInput.value.trim();
+    if (!url) { linkModal.classList.add('hidden'); return; }
+    const sel = window.getSelection();
+    if (sel.toString() && editorEl.contains(sel.anchorNode)) {
+        runCmd('createLink', url);
+    } else {
+        const text = label || url;
+        runCmd('insertHTML', `<a href="${url}" target="_blank" rel="noopener">${text}</a>`);
+    }
+    linkModal.classList.add('hidden');
+    scheduleSave();
+});
+
+document.getElementById('insert-bookmark')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const name = await promptModalOpen({
+        title: 'Insert Bookmark',
+        message: 'Bookmark name',
+        value: 'bookmark-' + Date.now().toString(36),
+        hint: 'A highlighted marker will be inserted.'
+    });
+    if (!name) return;
+    runCmd('insertHTML', `<span class="bookmark" id="${escapeHTML(name)}">🔖 ${escapeHTML(name)}</span>&nbsp;`);
+    scheduleSave();
+});
+
+document.getElementById('insert-date')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    runCmd('insertText', new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }));
+    scheduleSave();
+});
+document.getElementById('insert-datetime')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    runCmd('insertText', new Date().toLocaleString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }));
+    scheduleSave();
+});
+
+document.getElementById('insert-hr')?.addEventListener('pointerdown', e => {
+    e.preventDefault(); runCmd('insertHorizontalRule'); scheduleSave();
+});
+
+// Task list
+document.getElementById('insert-tasklist')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const html = `<div class="task-item"><input type="checkbox">&nbsp;<span>Task 1</span></div>
+<div class="task-item"><input type="checkbox">&nbsp;<span>Task 2</span></div><p><br></p>`;
+    runCmd('insertHTML', html);
+    scheduleSave();
+});
+
+// Quote with prompt
+document.getElementById('insert-quote')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const text = await promptModalOpen({ title: 'Insert Quote', message: 'Quote text', value: '' });
+    if (!text) return;
+    runCmd('insertHTML', `<blockquote>${escapeHTML(text)}</blockquote><p><br></p>`);
+    scheduleSave();
+});
+
+// Code block with language
+document.getElementById('insert-code')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const lang = await promptModalOpen({ title: 'Code block', message: 'Language (optional)', value: '' });
+    const code = await promptModalOpen({ title: 'Code block', message: 'Code', value: '' });
+    if (code === null) return;
+    const langAttr = lang ? ` data-lang="${escapeHTML(lang)}"` : '';
+    runCmd('insertHTML', `<pre${langAttr}>${escapeHTML(code)}</pre><p><br></p>`);
+    scheduleSave();
+});
+
+// Table of contents
+document.getElementById('insert-toc')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const headings = editorEl.querySelectorAll('h1, h2, h3');
+    if (!headings.length) { showToast('No headings found in this document.', 2500); return; }
+    let html = '<div class="toc"><div class="toc-title">Table of Contents</div><ul>';
+    headings.forEach((h, i) => {
+        const id = 'toc-' + i;
+        h.id = id;
+        const indent = h.tagName === 'H1' ? 0 : h.tagName === 'H2' ? 16 : 32;
+        html += `<li style="margin-left:${indent}px"><a href="#${id}">${escapeHTML(h.textContent)}</a></li>`;
+    });
+    html += '</ul></div><p><br></p>';
+    runCmd('insertHTML', html);
+    scheduleSave();
+});
+
+// Footnote
+document.getElementById('insert-footnote')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const text = await promptModalOpen({ title: 'Footnote', message: 'Footnote text', value: '' });
+    if (!text) return;
+    const num = (editorEl.querySelectorAll('.footnote').length || 0) + 1;
+    runCmd('insertHTML',
+        `<span class="footnote" title="${escapeHTML(text)}" data-note="${escapeHTML(text)}">[${num}]</span>&nbsp;`);
+    scheduleSave();
+});
+
+// Page number placeholder
+document.getElementById('insert-pagenum')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    runCmd('insertHTML', `<span class="page-number">Page&nbsp;<span class="page-num">1</span></span>&nbsp;`);
+    scheduleSave();
+});
+
+// Table insert via modal
+document.getElementById('insert-table')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    tableModal.classList.remove('hidden');
+    setTimeout(() => tableRowsInput.focus(), 40);
+});
+tableModalClose?.addEventListener('click', () => tableModal.classList.add('hidden'));
+tableModalCancel?.addEventListener('click', () => tableModal.classList.add('hidden'));
+tableModalConfirm?.addEventListener('click', () => {
+    const rows = parseInt(tableRowsInput.value, 10) || 3;
+    const cols = parseInt(tableColsInput.value, 10) || 3;
+    if (rows < 1 || cols < 1) return;
+    let html = '<table><tbody>';
+    for (let r = 0; r < rows; r++) {
+        html += '<tr>';
+        for (let c = 0; c < cols; c++) html += '<td><br></td>';
+        html += '</tr>';
+    }
+    html += '</tbody></table><p><br></p>';
+    runCmd('insertHTML', html);
+    tableModal.classList.add('hidden');
+    scheduleSave();
+});
+
+// Image with compression
 const IMAGE_MAX_WIDTH = 1600;
 const IMAGE_QUALITY = 0.82;
 function compressImage(file) {
@@ -1427,12 +1531,10 @@ function compressImage(file) {
                 let { width, height } = img;
                 if (width > IMAGE_MAX_WIDTH) {
                     const ratio = IMAGE_MAX_WIDTH / width;
-                    width = IMAGE_MAX_WIDTH;
-                    height = Math.round(height * ratio);
+                    width = IMAGE_MAX_WIDTH; height = Math.round(height * ratio);
                 }
                 const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
+                canvas.width = width; canvas.height = height;
                 canvas.getContext('2d').drawImage(img, 0, 0, width, height);
                 const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
                 canvas.toBlob(blob => {
@@ -1455,7 +1557,8 @@ function blobToDataURL(blob) {
         r.readAsDataURL(blob);
     });
 }
-document.getElementById('insert-image')?.addEventListener('click', () => {
+document.getElementById('insert-image')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
     const input = document.createElement('input');
     input.type = 'file'; input.accept = 'image/*';
     input.onchange = async () => {
@@ -1463,170 +1566,303 @@ document.getElementById('insert-image')?.addEventListener('click', () => {
         try {
             const compressed = await compressImage(file);
             const dataUrl = await blobToDataURL(compressed);
-            document.execCommand('insertImage', false, dataUrl);
-            scheduleSave(); editorEl.focus();
+            runCmd('insertImage', dataUrl);
+            scheduleSave();
             const saved = Math.max(0, file.size - compressed.size);
             if (saved > 1024) showToast(`Image compressed — saved ${(saved / 1024).toFixed(0)} KB`);
         } catch (err) {
-            console.error('Image compression failed:', err);
             const reader = new FileReader();
-            reader.onload = () => {
-                document.execCommand('insertImage', false, reader.result);
-                scheduleSave(); editorEl.focus();
-            };
+            reader.onload = () => { runCmd('insertImage', reader.result); scheduleSave(); };
             reader.readAsDataURL(file);
         }
     };
     input.click();
 });
-document.getElementById('insert-hr')?.addEventListener('click', () => {
-    document.execCommand('insertHorizontalRule'); scheduleSave(); editorEl.focus();
-});
-document.getElementById('insert-table')?.addEventListener('click', () => {
-    const rows = parseInt(prompt('Rows?', '3'), 10);
-    const cols = parseInt(prompt('Columns?', '3'), 10);
-    if (!rows || !cols || rows < 1 || cols < 1) return;
-    let html = '<table><tbody>';
-    for (let r = 0; r < rows; r++) {
-        html += '<tr>';
-        for (let c = 0; c < cols; c++) html += '<td><br></td>';
-        html += '</tr>';
-    }
-    html += '</tbody></table><p><br></p>';
-    document.execCommand('insertHTML', false, html);
-    scheduleSave(); editorEl.focus();
-});
-document.getElementById('insert-shape')?.addEventListener('click', () => {
-    const shape = prompt('Shape? (rect, circle, triangle)', 'rect');
+
+document.getElementById('insert-shape')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const shape = await promptModalOpen({ title: 'Insert Shape', message: 'Type: rect, circle, or triangle', value: 'rect' });
     if (!shape) return;
     const svg = shape === 'circle'
         ? '<svg width="80" height="80"><circle cx="40" cy="40" r="38" fill="#2b7fff"/></svg>'
         : shape === 'triangle'
             ? '<svg width="80" height="80"><polygon points="40,4 76,76 4,76" fill="#2b7fff"/></svg>'
             : '<svg width="100" height="60"><rect width="100" height="60" fill="#2b7fff"/></svg>';
-    document.execCommand('insertHTML', false, svg);
-    scheduleSave(); editorEl.focus();
+    runCmd('insertHTML', svg);
+    scheduleSave();
 });
-document.getElementById('insert-emoji')?.addEventListener('click', () => {
-    const e = prompt('Type or paste an emoji:', '😀');
-    if (!e) return;
-    document.execCommand('insertText', false, e);
-    scheduleSave(); editorEl.focus();
+
+document.getElementById('insert-emoji')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const emoji = await promptModalOpen({ title: 'Insert Emoji', message: 'Type or paste an emoji', value: '😀' });
+    if (!emoji) return;
+    runCmd('insertText', emoji);
+    scheduleSave();
 });
-document.getElementById('insert-symbol')?.addEventListener('click', () => {
-    const s = prompt('Type or paste a symbol:', '©');
-    if (!s) return;
-    document.execCommand('insertText', false, s);
-    scheduleSave(); editorEl.focus();
+document.getElementById('insert-symbol')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const sym = await promptModalOpen({ title: 'Insert Symbol', message: 'Type or paste a symbol (©, →, √, π)', value: '©' });
+    if (!sym) return;
+    runCmd('insertText', sym);
+    scheduleSave();
 });
-document.getElementById('insert-date')?.addEventListener('click', () => {
-    const formatted = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-    document.execCommand('insertText', false, formatted);
-    scheduleSave(); editorEl.focus();
-});
-document.getElementById('insert-pagebreak')?.addEventListener('click', () => {
-    document.execCommand('insertHTML', false, '<hr class="page-break"><p><br></p>');
-    scheduleSave(); editorEl.focus();
+
+document.getElementById('insert-pagebreak')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    runCmd('insertHTML', '<hr class="page-break"><p><br></p>');
+    scheduleSave();
 });
 
 /* =========================================================
-   TABLE CONTEXT MENU
+   TABLE ACTIONS (ribbon + context menu + long-press)
    ========================================================= */
-editorEl.addEventListener('contextmenu', e => {
-    const cell = e.target.closest('td');
-    if (!cell || !editorEl.contains(cell)) return;
-    e.preventDefault();
-    tableMenuTargetCell = cell;
-    tableMenu.classList.remove('hidden');
-    tableMenu.style.left = Math.min(e.clientX, window.innerWidth - 240) + 'px';
-    tableMenu.style.top = Math.min(e.clientY, window.innerHeight - 300) + 'px';
-});
-tableMenu.addEventListener('click', e => {
-    const btn = e.target.closest('button[data-table-action]');
-    if (!btn || !tableMenuTargetCell) return;
-    const action = btn.dataset.tableAction;
-    const cell = tableMenuTargetCell;
+function runTableAction(action, cell) {
+    if (!cell) return;
     const row = cell.parentElement;
     const table = cell.closest('table');
     if (!row || !table) return;
     const idx = Array.from(row.children).indexOf(cell);
     const newCell = () => { const td = document.createElement('td'); td.innerHTML = '<br>'; return td; };
+
     switch (action) {
         case 'row-above': {
             const nr = row.cloneNode(false);
             for (let i = 0; i < row.children.length; i++) nr.appendChild(newCell());
-            row.parentNode.insertBefore(nr, row);
-            break;
+            row.parentNode.insertBefore(nr, row); break;
         }
         case 'row-below': {
             const nr = row.cloneNode(false);
             for (let i = 0; i < row.children.length; i++) nr.appendChild(newCell());
-            row.parentNode.insertBefore(nr, row.nextSibling);
-            break;
+            row.parentNode.insertBefore(nr, row.nextSibling); break;
         }
         case 'col-left': {
             Array.from(table.rows).forEach(r => {
                 const ref = r.children[idx];
                 if (ref) r.insertBefore(newCell(), ref);
-            });
-            break;
+            }); break;
         }
         case 'col-right': {
             Array.from(table.rows).forEach(r => {
                 const ref = r.children[idx];
                 if (ref) r.insertBefore(newCell(), ref.nextSibling);
-            });
-            break;
+            }); break;
         }
         case 'row-delete': row.remove(); break;
         case 'col-delete': Array.from(table.rows).forEach(r => r.children[idx]?.remove()); break;
         case 'table-delete': table.remove(); break;
+        case 'merge': {
+            const sel = window.getSelection();
+            if (sel.rangeCount > 0 && !sel.isCollapsed) {
+                const range = sel.getRangeAt(0);
+                const cells = [];
+                table.querySelectorAll('td').forEach(td => {
+                    if (range.intersectsNode(td)) cells.push(td);
+                });
+                if (cells.length > 1) {
+                    const first = cells[0];
+                    let combined = '';
+                    cells.forEach((c, i) => { combined += (i ? '<br>' : '') + c.innerHTML; });
+                    first.innerHTML = combined;
+                    first.colSpan = cells.length;
+                    cells.slice(1).forEach(c => c.remove());
+                }
+            }
+            break;
+        }
     }
+    scheduleSave();
+}
+
+// Ribbon table buttons
+document.querySelectorAll('[data-table-action]').forEach(btn => {
+    btn.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        const cell = tableMenuTargetCell || getCurrentTableCell();
+        if (!cell) return;
+        runTableAction(btn.dataset.tableAction, cell);
+    });
+});
+
+function getCurrentTableCell() {
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return null;
+    let node = sel.anchorNode;
+    while (node) {
+        if (node.nodeType === 1 && node.tagName === 'TD') return node;
+        node = node.parentNode;
+    }
+    return null;
+}
+
+// Right-click / long-press on table
+function showTableMenu(clientX, clientY, cell) {
+    tableMenuTargetCell = cell;
+    tableMenu.classList.remove('hidden');
+    tableMenu.style.left = Math.min(clientX, window.innerWidth - 240) + 'px';
+    tableMenu.style.top = Math.min(clientY, window.innerHeight - 300) + 'px';
+}
+
+editorEl.addEventListener('contextmenu', e => {
+    const cell = e.target.closest('td');
+    if (!cell) return;
+    e.preventDefault();
+    showTableMenu(e.clientX, e.clientY, cell);
+});
+
+// Long press for touch
+let longPressTimer = null;
+editorEl.addEventListener('touchstart', e => {
+    const cell = e.target.closest('td');
+    if (!cell) return;
+    const touch = e.touches[0];
+    longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        if (navigator.vibrate) navigator.vibrate(30);
+        showTableMenu(touch.clientX, touch.clientY, cell);
+    }, 500);
+}, { passive: true });
+editorEl.addEventListener('touchend', () => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+});
+editorEl.addEventListener('touchmove', () => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+});
+
+tableMenu.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-table-action]');
+    if (!btn || !tableMenuTargetCell) return;
+    runTableAction(btn.dataset.tableAction, tableMenuTargetCell);
     tableMenu.classList.add('hidden');
-    scheduleSave(); editorEl.focus();
+    editorEl.focus();
+});
+
+// Cell color pickers
+document.getElementById('cell-bg-color')?.addEventListener('input', e => {
+    const cell = tableMenuTargetCell || getCurrentTableCell();
+    if (cell) { cell.style.backgroundColor = e.target.value; scheduleSave(); }
+});
+document.getElementById('cell-border-color')?.addEventListener('input', e => {
+    const cell = tableMenuTargetCell || getCurrentTableCell();
+    if (cell) { cell.style.borderColor = e.target.value; scheduleSave(); }
 });
 
 /* =========================================================
-   FIND BAR
+   FIND / REPLACE
    ========================================================= */
 const findBar = document.getElementById('find-bar');
 const findInput = document.getElementById('find-input');
+const replaceInput = document.getElementById('replace-input');
 const findCount = document.getElementById('find-count');
 
-document.getElementById('find-btn')?.addEventListener('click', () => {
-    findBar.classList.toggle('hidden');
-    if (!findBar.classList.contains('hidden')) findInput.focus();
-});
+function openFind(replaceMode = false) {
+    findBar.classList.remove('hidden');
+    findBar.classList.toggle('replace-mode', replaceMode);
+    findInput.focus();
+    findInput.select();
+}
+
+document.getElementById('find-btn')?.addEventListener('pointerdown', e => { e.preventDefault(); openFind(false); });
+document.getElementById('replace-btn')?.addEventListener('pointerdown', e => { e.preventDefault(); openFind(true); });
+
 document.getElementById('find-close')?.addEventListener('click', () => {
     findBar.classList.add('hidden');
     window.getSelection().removeAllRanges();
 });
-findInput?.addEventListener('input', () => {
+
+findInput?.addEventListener('input', performFind);
+document.getElementById('find-next')?.addEventListener('click', () => moveFind(1));
+document.getElementById('find-prev')?.addEventListener('click', () => moveFind(-1));
+
+function performFind() {
     const q = findInput.value;
+    findMatches = [];
+    currentFindIndex = 0;
     if (!q) { findCount.textContent = ''; return; }
-    const text = editorEl.innerText.toLowerCase();
-    const lower = q.toLowerCase();
-    let count = 0, i = 0;
-    while ((i = text.indexOf(lower, i)) !== -1) { count++; i += lower.length; }
-    findCount.textContent = `${count} match${count === 1 ? '' : 'es'}`;
-    const sel = window.getSelection();
-    sel.removeAllRanges();
     const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
     let node;
+    const lower = q.toLowerCase();
     while ((node = walker.nextNode())) {
-        const idx = node.textContent.toLowerCase().indexOf(lower);
-        if (idx !== -1) {
-            const r = document.createRange();
-            r.setStart(node, idx); r.setEnd(node, idx + q.length);
-            sel.addRange(r);
-            node.parentElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
-            break;
+        const text = node.textContent.toLowerCase();
+        let start = 0;
+        while ((start = text.indexOf(lower, start)) !== -1) {
+            findMatches.push({ node, start, end: start + q.length });
+            start += lower.length;
         }
     }
+    findCount.textContent = `${findMatches.length} match${findMatches.length === 1 ? '' : 'es'}`;
+    if (findMatches.length) {
+        currentFindIndex = 0;
+        highlightMatch();
+    }
+}
+
+function moveFind(dir) {
+    if (!findMatches.length) return;
+    currentFindIndex = (currentFindIndex + dir + findMatches.length) % findMatches.length;
+    highlightMatch();
+}
+
+function highlightMatch() {
+    const m = findMatches[currentFindIndex];
+    if (!m) return;
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    const r = document.createRange();
+    r.setStart(m.node, m.start);
+    r.setEnd(m.node, m.end);
+    sel.addRange(r);
+    m.node.parentElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    findCount.textContent = `${currentFindIndex + 1} of ${findMatches.length}`;
+}
+
+document.getElementById('replace-one')?.addEventListener('click', () => {
+    const m = findMatches[currentFindIndex];
+    if (!m) return;
+    const replaceWith = replaceInput.value;
+    const r = document.createRange();
+    r.setStart(m.node, m.start);
+    r.setEnd(m.node, m.end);
+    r.deleteContents();
+    r.insertNode(document.createTextNode(replaceWith));
+    scheduleSave();
+    performFind();
+});
+
+document.getElementById('replace-all')?.addEventListener('click', () => {
+    const q = findInput.value;
+    const replaceWith = replaceInput.value;
+    if (!q) return;
+    let count = 0;
+    const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) nodes.push(node);
+    nodes.forEach(n => {
+        const text = n.textContent;
+        const lower = text.toLowerCase();
+        const ql = q.toLowerCase();
+        let idx = lower.indexOf(ql);
+        if (idx !== -1) {
+            const parts = [];
+            let last = 0;
+            while (idx !== -1) {
+                parts.push(text.slice(last, idx));
+                parts.push(replaceWith);
+                last = idx + q.length;
+                idx = lower.indexOf(ql, last);
+                count++;
+            }
+            parts.push(text.slice(last));
+            n.textContent = parts.join('');
+        }
+    });
+    scheduleSave();
+    showToast(`Replaced ${count} occurrence${count === 1 ? '' : 's'}.`);
+    performFind();
 });
 
 /* =========================================================
-   WORD COUNT
+   WORD COUNT / STATS
    ========================================================= */
 const wcPopup = document.getElementById('wordcount-popup');
 function showWordCount() {
@@ -1645,15 +1881,34 @@ function showWordCount() {
   `;
     wcPopup.classList.toggle('hidden');
 }
+function showReadingTime() {
+    const text = editorEl.innerText;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const minutes = Math.ceil(words / 200);
+    wcPopup.innerHTML = `<div>⏱ <strong>~${minutes} min</strong> reading time</div><div style="font-size:11px;color:var(--muted);margin-top:4px">based on 200 wpm</div>`;
+    wcPopup.classList.remove('hidden');
+}
+function showCharFreq() {
+    const text = editorEl.innerText.toLowerCase().replace(/\s/g, '');
+    const freq = {};
+    for (const ch of text) freq[ch] = (freq[ch] || 0) + 1;
+    const top = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    wcPopup.innerHTML = '<div style="margin-bottom:6px"><strong>Top characters</strong></div>' +
+        top.map(([c, n]) => `<div><code>${escapeHTML(c)}</code> × ${n}</div>`).join('');
+    wcPopup.classList.remove('hidden');
+}
 document.getElementById('wordcount-btn')?.addEventListener('click', showWordCount);
 document.getElementById('wordcount-btn-2')?.addEventListener('click', showWordCount);
+document.getElementById('readingtime-btn')?.addEventListener('click', showReadingTime);
+document.getElementById('charfreq-btn')?.addEventListener('click', showCharFreq);
 document.addEventListener('click', e => {
     if (wcPopup.classList.contains('hidden')) return;
-    if (!wcPopup.contains(e.target) && !e.target.closest('#wordcount-btn, #wordcount-btn-2')) wcPopup.classList.add('hidden');
+    if (!wcPopup.contains(e.target) && !e.target.closest('#wordcount-btn, #wordcount-btn-2, #readingtime-btn, #charfreq-btn'))
+        wcPopup.classList.add('hidden');
 });
 
 /* =========================================================
-   REVIEW STUBS
+   REVIEW
    ========================================================= */
 document.getElementById('spellcheck-btn')?.addEventListener('click', () => {
     editorEl.spellcheck = !editorEl.spellcheck;
@@ -1664,12 +1919,12 @@ document.getElementById('thesaurus-btn')?.addEventListener('click', () => {
     if (!word) { showToast('Select a word first.', 2500); return; }
     window.open('https://www.thesaurus.com/browse/' + encodeURIComponent(word), '_blank');
 });
-document.getElementById('comment-btn')?.addEventListener('click', () => {
-    const text = prompt('Comment:');
+document.getElementById('comment-btn')?.addEventListener('pointerdown', async e => {
+    e.preventDefault();
+    const text = await promptModalOpen({ title: 'Add Comment', message: 'Comment text', value: '' });
     if (!text) return;
-    document.execCommand('insertHTML', false,
-        ` <span class="doc-comment" title="${text.replace(/"/g, '&quot;')}" style="background:#fff8b8;border-bottom:2px solid #f0c000;">[💬]</span> `);
-    scheduleSave(); editorEl.focus();
+    runCmd('insertHTML', ` <span class="doc-comment" title="${escapeHTML(text)}" style="background:#fff8b8;border-bottom:2px solid #f0c000;">[💬]</span> `);
+    scheduleSave();
 });
 
 /* =========================================================
@@ -1691,6 +1946,66 @@ document.getElementById('compact-toggle')?.addEventListener('click', () => {
     compactTB.classList.toggle('hidden', !compactMode);
     ribbon.classList.toggle('hidden', compactMode);
     document.getElementById('compact-toggle').classList.toggle('active', compactMode);
+});
+
+/* =========================================================
+   MOBILE BOTTOM BAR
+   ========================================================= */
+mobileBar?.addEventListener('pointerdown', e => {
+    const btn = e.target.closest('.mb-btn');
+    if (!btn) return;
+    e.preventDefault();
+    const cmd = btn.dataset.mb;
+    switch (cmd) {
+        case 'undo': runCmd('undo'); break;
+        case 'redo': runCmd('redo'); break;
+        case 'bold': runCmd('bold'); break;
+        case 'italic': runCmd('italic'); break;
+        case 'underline': runCmd('underline'); break;
+        case 'heading':
+            runCmd('formatBlock', 'H2');
+            break;
+        case 'bullet':
+            runCmd('insertUnorderedList');
+            break;
+        case 'more':
+            mobileSheet.classList.remove('hidden');
+            return;
+    }
+    updateToolbarState();
+});
+
+mobileSheetClose?.addEventListener('click', () => mobileSheet.classList.add('hidden'));
+
+mobileSheet?.addEventListener('pointerdown', e => {
+    const btn = e.target.closest('.sheet-btn');
+    if (!btn) return;
+    e.preventDefault();
+    const action = btn.dataset.sheet;
+    mobileSheet.classList.add('hidden');
+    switch (action) {
+        case 'strikeThrough': runCmd('strikeThrough'); break;
+        case 'superscript': runCmd('superscript'); break;
+        case 'subscript': runCmd('subscript'); break;
+        case 'ordered': runCmd('insertOrderedList'); break;
+        case 'tasklist': document.getElementById('insert-tasklist')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'quote': document.getElementById('insert-quote')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'code': document.getElementById('insert-code')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'link': document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'image': document.getElementById('insert-image')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'table': document.getElementById('insert-table')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'hr': runCmd('insertHorizontalRule'); break;
+        case 'date': document.getElementById('insert-date')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'toc': document.getElementById('insert-toc')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'footnote': document.getElementById('insert-footnote')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'bookmark': document.getElementById('insert-bookmark')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'clear': runCmd('removeFormat'); break;
+        case 'find': openFind(false); break;
+        case 'save': saveNow(); break;
+        case 'saveas': openSaveAsModal(); break;
+        case 'back': saveNow().then(showList); break;
+    }
+    updateToolbarState();
 });
 
 /* =========================================================
@@ -1716,30 +2031,38 @@ const paletteInput = document.getElementById('palette-input');
 const paletteList = document.getElementById('palette-list');
 
 const COMMANDS = [
-    { name: 'Bold', icon: 'B', run: () => document.execCommand('bold') },
-    { name: 'Italic', icon: 'I', run: () => document.execCommand('italic') },
-    { name: 'Underline', icon: 'U', run: () => document.execCommand('underline') },
-    { name: 'Strikethrough', icon: 'S', run: () => document.execCommand('strikeThrough') },
-    { name: 'Heading 1', icon: 'H1', run: () => document.execCommand('formatBlock', false, 'H1') },
-    { name: 'Heading 2', icon: 'H2', run: () => document.execCommand('formatBlock', false, 'H2') },
-    { name: 'Heading 3', icon: 'H3', run: () => document.execCommand('formatBlock', false, 'H3') },
-    { name: 'Normal', icon: '¶', run: () => document.execCommand('formatBlock', false, 'P') },
-    { name: 'Quote', icon: '❝', run: () => document.execCommand('formatBlock', false, 'BLOCKQUOTE') },
-    { name: 'Code Block', icon: '{ }', run: () => document.execCommand('formatBlock', false, 'PRE') },
-    { name: 'Bullet List', icon: '•', run: () => document.execCommand('insertUnorderedList') },
-    { name: 'Numbered List', icon: '1.', run: () => document.execCommand('insertOrderedList') },
-    { name: 'Align Left', icon: '⬅', run: () => document.execCommand('justifyLeft') },
-    { name: 'Align Center', icon: '↔', run: () => document.execCommand('justifyCenter') },
-    { name: 'Align Right', icon: '➡', run: () => document.execCommand('justifyRight') },
-    { name: 'Insert Link', icon: '🔗', run: () => document.getElementById('insert-link')?.click() },
-    { name: 'Insert Image', icon: '🖼', run: () => document.getElementById('insert-image')?.click() },
-    { name: 'Insert Table', icon: '▦', run: () => document.getElementById('insert-table')?.click() },
-    { name: 'Insert Horizontal Rule', icon: '―', run: () => document.execCommand('insertHorizontalRule') },
-    { name: 'Insert Page Break', icon: '⎯', run: () => document.getElementById('insert-pagebreak')?.click() },
-    { name: 'Insert Date', icon: '📅', run: () => document.getElementById('insert-date')?.click() },
-    { name: 'Insert Emoji', icon: '😀', run: () => document.getElementById('insert-emoji')?.click() },
-    { name: 'Find in document', icon: '🔍', run: () => { findBar.classList.remove('hidden'); findInput.focus(); } },
+    { name: 'Bold', icon: 'B', run: () => runCmd('bold') },
+    { name: 'Italic', icon: 'I', run: () => runCmd('italic') },
+    { name: 'Underline', icon: 'U', run: () => runCmd('underline') },
+    { name: 'Strikethrough', icon: 'S', run: () => runCmd('strikeThrough') },
+    { name: 'Heading 1', icon: 'H1', run: () => runCmd('formatBlock', 'H1') },
+    { name: 'Heading 2', icon: 'H2', run: () => runCmd('formatBlock', 'H2') },
+    { name: 'Heading 3', icon: 'H3', run: () => runCmd('formatBlock', 'H3') },
+    { name: 'Normal', icon: '¶', run: () => runCmd('formatBlock', 'P') },
+    { name: 'Quote', icon: '❝', run: () => runCmd('formatBlock', 'BLOCKQUOTE') },
+    { name: 'Code Block', icon: '{ }', run: () => runCmd('formatBlock', 'PRE') },
+    { name: 'Bullet List', icon: '•', run: () => runCmd('insertUnorderedList') },
+    { name: 'Numbered List', icon: '1.', run: () => runCmd('insertOrderedList') },
+    { name: 'Align Left', icon: '⬅', run: () => runCmd('justifyLeft') },
+    { name: 'Align Center', icon: '↔', run: () => runCmd('justifyCenter') },
+    { name: 'Align Right', icon: '➡', run: () => runCmd('justifyRight') },
+    { name: 'Insert Link', icon: '🔗', run: () => document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Image', icon: '🖼', run: () => document.getElementById('insert-image')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Table', icon: '▦', run: () => document.getElementById('insert-table')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Horizontal Rule', icon: '―', run: () => runCmd('insertHorizontalRule') },
+    { name: 'Insert Page Break', icon: '⎯', run: () => document.getElementById('insert-pagebreak')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Date', icon: '📅', run: () => document.getElementById('insert-date')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Date & Time', icon: '🕐', run: () => document.getElementById('insert-datetime')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Emoji', icon: '😀', run: () => document.getElementById('insert-emoji')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Bookmark', icon: '🔖', run: () => document.getElementById('insert-bookmark')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Table of Contents', icon: '☰', run: () => document.getElementById('insert-toc')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Footnote', icon: '⁽¹⁾', run: () => document.getElementById('insert-footnote')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Checklist', icon: '☑', run: () => document.getElementById('insert-tasklist')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Find in document', icon: '🔍', run: () => openFind(false) },
+    { name: 'Find & Replace', icon: '⇄', run: () => openFind(true) },
     { name: 'Word Count', icon: '#', run: showWordCount },
+    { name: 'Reading Time', icon: '⏱', run: showReadingTime },
+    { name: 'Character Frequency', icon: '🔤', run: showCharFreq },
     { name: 'Toggle Dark Mode', icon: '🌙', run: toggleTheme },
     { name: 'Preview', icon: '👁', run: () => document.getElementById('preview-btn')?.click() },
     { name: 'Fullscreen', icon: '⛶', run: () => document.getElementById('fullscreen-btn')?.click() },
@@ -1799,8 +2122,6 @@ function runPaletteSelection() {
     if (!cmd) return;
     closePalette();
     cmd.run();
-    const keepFocus = ['Save', 'Save As…', 'Back to Documents', 'New Document', 'Print / Save as PDF', 'Import File', 'Install App', 'Toggle Dark Mode', 'Search Documents'].includes(cmd.name);
-    if (!keepFocus) editorEl.focus();
 }
 document.getElementById('palette-btn').addEventListener('click', openPalette);
 paletteInput.addEventListener('input', e => renderPalette(e.target.value));
@@ -1825,41 +2146,22 @@ paletteOverlay.addEventListener('click', e => {
 });
 
 /* =========================================================
-   TOOLBAR ACTIVE STATE
-   ========================================================= */
-function updateToolbarState() {
-    ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript',
-        'insertUnorderedList', 'insertOrderedList',
-        'justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull'].forEach(cmd => {
-            document.querySelectorAll(`[data-cmd="${cmd}"]`).forEach(btn => {
-                try { btn.classList.toggle('active', document.queryCommandState(cmd)); } catch (_) { }
-            });
-        });
-}
-document.addEventListener('selectionchange', () => {
-    if (!editorView.classList.contains('hidden')) updateToolbarState();
-});
-
-/* =========================================================
-   GLOBAL KEYBOARD SHORTCUTS — capture phase, works everywhere
+   GLOBAL KEYBOARD SHORTCUTS (capture phase)
    ========================================================= */
 document.addEventListener('keydown', e => {
-    // Don't interfere when focus is in a text input / select / modal
     const target = e.target;
     const isTextInput = target && (
         (target.tagName === 'INPUT' && target.type !== 'color') ||
         target.tagName === 'TEXTAREA' ||
         target.tagName === 'SELECT'
     );
-    const inModal = target && target.closest && target.closest('#save-as-modal');
+    const inModal = target && target.closest && target.closest('.modal-overlay');
     if (isTextInput && !inModal) return;
 
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
-
     if (!mod) return;
 
-    // Ctrl+Shift combos first
     if (e.shiftKey) {
         if (key === 'p') { e.preventDefault(); e.stopPropagation(); openPalette(); return; }
         if (key === 'd') { e.preventDefault(); e.stopPropagation(); toggleTheme(); return; }
@@ -1868,44 +2170,19 @@ document.addEventListener('keydown', e => {
         return;
     }
 
-    // Plain Ctrl combos
     switch (key) {
-        case 's':
-            e.preventDefault(); e.stopPropagation(); saveNow(); return;
-        case 'b':
-            e.preventDefault(); e.stopPropagation();
-            document.execCommand('bold');
-            updateToolbarState();
-            return;
-        case 'i':
-            e.preventDefault(); e.stopPropagation();
-            document.execCommand('italic');
-            updateToolbarState();
-            return;
-        case 'u':
-            e.preventDefault(); e.stopPropagation();
-            document.execCommand('underline');
-            updateToolbarState();
-            return;
-        case 'k':
-            e.preventDefault(); e.stopPropagation();
-            document.getElementById('insert-link')?.click();
-            return;
-        case 'p':
-            e.preventDefault(); e.stopPropagation();
-            printDoc();
-            return;
+        case 's': e.preventDefault(); e.stopPropagation(); saveNow(); return;
+        case 'b': e.preventDefault(); e.stopPropagation(); runCmd('bold'); updateToolbarState(); return;
+        case 'i': e.preventDefault(); e.stopPropagation(); runCmd('italic'); updateToolbarState(); return;
+        case 'u': e.preventDefault(); e.stopPropagation(); runCmd('underline'); updateToolbarState(); return;
+        case 'k': e.preventDefault(); e.stopPropagation(); document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown')); return;
+        case 'p': e.preventDefault(); e.stopPropagation(); printDoc(); return;
         case 'f':
             e.preventDefault(); e.stopPropagation();
-            if (editorView.classList.contains('hidden')) {
-                searchInput?.focus();
-            } else {
-                findBar.classList.remove('hidden');
-                findInput.focus();
-            }
+            if (editorView.classList.contains('hidden')) searchInput?.focus();
+            else openFind(false);
             return;
         case 'a':
-            // Only intercept Ctrl+A inside the editor — let the browser handle it elsewhere
             if (document.activeElement === editorEl || editorEl.contains(document.activeElement)) {
                 e.preventDefault(); e.stopPropagation();
                 const range = document.createRange();
@@ -1916,17 +2193,14 @@ document.addEventListener('keydown', e => {
             }
             return;
     }
-}, true);  // ← capture phase — this is the critical part
+}, true);
 
-// Also intercept the browser's own "save page" hotkey when it fires
 window.addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') e.preventDefault();
 }, true);
 
 /* =========================================================
-   PASTE AS PLAIN TEXT
+   PASTE PLAIN TEXT
    ========================================================= */
 editorEl.addEventListener('paste', e => {
     const text = e.clipboardData.getData('text/plain');
@@ -1936,12 +2210,30 @@ editorEl.addEventListener('paste', e => {
 });
 
 /* =========================================================
+   VISUAL VIEWPORT — keep editor visible when keyboard opens
+   ========================================================= */
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+        if (isMobile()) {
+            document.documentElement.style.setProperty('--vh', window.visualViewport.height + 'px');
+        }
+    });
+}
+
+/* =========================================================
    EVENTS
    ========================================================= */
 newDocBtn.addEventListener('click', createDoc);
 backBtn.addEventListener('click', async () => { await saveNow(); showList(); });
 titleInput.addEventListener('input', scheduleSave);
 editorEl.addEventListener('input', scheduleSave);
+
+document.addEventListener('keydown', e => {
+    if (editorView.classList.contains('hidden') && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        searchInput?.focus();
+    }
+});
 
 /* =========================================================
    PWA

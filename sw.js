@@ -1,9 +1,9 @@
 /* =========================================================
    Quickie Docs — Service Worker
-   v1.3.0 — Custom DOCX writer + Save As
+   v1.4.0 — Mobile fixes + expanded toolbar
    ========================================================= */
 
-const VERSION = 'v1.3.0';
+const VERSION = 'v1.4.0';
 const APP_CACHE = `quickie-docs-app-${VERSION}`;
 const CDN_CACHE = `quickie-docs-cdn-${VERSION}`;
 const RUNTIME_CACHE = `quickie-docs-runtime-${VERSION}`;
@@ -23,7 +23,6 @@ const APP_SHELL = [
     './assets/icon-maskable-512.png'
 ];
 
-// Note: html-docx-js removed — we now write DOCX ourselves with JSZip
 const CDN_URLS = [
     'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
     'https://cdn.jsdelivr.net/npm/mammoth@1.7.0/mammoth.browser.min.js'
@@ -36,19 +35,18 @@ self.addEventListener('install', event => {
             try {
                 const res = await fetch(url, { cache: 'no-cache' });
                 if (res.ok) await appCache.put(url, res);
-                else console.warn('[SW] Skipping (bad response):', url, res.status);
+                else console.warn('[SW] Skipping:', url, res.status);
             } catch (err) {
-                console.warn('[SW] Skipping (fetch failed):', url, err.message);
+                console.warn('[SW] Skipping:', url, err.message);
             }
         }));
-
         const cdnCache = await caches.open(CDN_CACHE);
         await Promise.all(CDN_URLS.map(async url => {
             try {
                 const res = await fetch(url, { mode: 'no-cors' });
                 await cdnCache.put(url, res);
             } catch (err) {
-                console.warn('[SW] Failed to pre-cache CDN:', url, err.message);
+                console.warn('[SW] CDN pre-cache failed:', url, err.message);
             }
         }));
     })());
