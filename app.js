@@ -1,7 +1,7 @@
 /* =========================================================
-   Quickie Docs — v1.4.5
-   2-row mobile bar + sticky formatting + image picker fix
-   + import focus/save fix
+   Quickie Docs — v1.5.0
+   Real DOCX image support (export + import round-trip)
+   + mobile image picker fix
    ========================================================= */
 
 // ---------- IndexedDB ----------
@@ -76,6 +76,7 @@ const themeLabel = document.getElementById('theme-label');
 const mobileBar = document.getElementById('mobile-bar');
 const mobileSheet = document.getElementById('mobile-sheet');
 const mobileSheetClose = document.getElementById('mobile-sheet-close');
+const imagePickerInput = document.getElementById('image-picker');
 
 const saveAsModal = document.getElementById('save-as-modal');
 const saveAsName = document.getElementById('save-as-name');
@@ -442,16 +443,12 @@ function attachPointerHandler(el, handler) {
     });
 }
 
-// Wire up ribbon buttons — sticky ones use toggleStickyFormat
 document.querySelectorAll('button[data-cmd]').forEach(btn => {
     const cmd = btn.dataset.cmd;
     const isSticky = ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'].includes(cmd);
     attachPointerHandler(btn, () => {
-        if (isSticky) {
-            toggleStickyFormat(cmd);
-        } else {
-            runCmd(cmd, btn.dataset.value || null);
-        }
+        if (isSticky) toggleStickyFormat(cmd);
+        else runCmd(cmd, btn.dataset.value || null);
         updateToolbarState();
     });
 });
@@ -674,7 +671,64 @@ function saveBlob(blob, filename) {
 }
 
 /* =========================================================
-   CUSTOM DOCX WRITER
+   IMAGE HELPERS
+   ========================================================= */
+function dataURLToBytes(dataURL) {
+    const base64 = dataURL.split(',')[1];
+    if (!base64) return null;
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
+function dataURLToContentType(dataURL) {
+    const m = dataURL.match(/^data:([^;]+);/);
+    return m ? m[1] : 'image/png';
+}
+function dataURLToExtension(contentType) {
+    if (contentType === 'image/jpeg' || contentType === 'image/jpg') return 'jpg';
+    if (contentType === 'image/gif') return 'gif';
+    if (contentType === 'image/svg+xml') return 'svg';
+    if (contentType === 'image/webp') return 'webp';
+    return 'png';
+}
+// Convert pixels to EMU (English Metric Units — Word's measurement)
+// 1 inch = 914400 EMU, 1 px (at 96 DPI) = 9525 EMU
+function pxToEmu(px) { return Math.round((parseFloat(px) || 0) * 9525); }
+
+// Extract all images from a document tree, returning:
+//   - a map: originalSrc -> { id, filename, dataURL, contentType, width, height }
+//   - the media bytes map for JSZip
+function extractImages(rootEl) {
+    const images = new Map();
+    const mediaFiles = {};
+    let counter = 0;
+    const imgs = rootEl.querySelectorAll('img');
+    for (const img of imgs) {
+        const src = img.getAttribute('src') || '';
+        if (!src.startsWith('data:')) continue;   // only inline base64
+        if (images.has(src)) continue;            // dedupe by data URL
+        counter++;
+        const contentType = dataURLToContentType(src);
+        const ext = dataURLToExtension(contentType);
+        const filename = `image${counter}.${ext}`;
+        const naturalW = img.naturalWidth || parseInt(img.getAttribute('width')) || 400;
+        const naturalH = img.naturalHeight || parseInt(img.getAttribute('height')) || 300;
+        images.set(src, {
+            id: counter,
+            filename,
+            dataURL: src,
+            contentType,
+            width: naturalW,
+            height: naturalH
+        });
+        mediaFiles[`word/media/${filename}`] = dataURLToBytes(src);
+    }
+    return { images, mediaFiles };
+}
+
+/* =========================================================
+   CUSTOM DOCX WRITER (with real images)
    ========================================================= */
 function escapeXml(s) {
     return String(s == null ? '' : s)
@@ -729,7 +783,47 @@ function cssToRunProps(el) {
     }
     return rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
 }
-function elementToRuns(node, inheritedRPr = '') {
+
+// Given an <img>, produce the OOXML <w:drawing> element
+function imageToDrawing(img, imageInfo) {
+    const cx = pxToEmu(imageInfo.width);
+    const cy = pxToEmu(imageInfo.height);
+    const rId = `rIdImg${imageInfo.id}`;
+    const docPrId = imageInfo.id + 100;
+    return `<w:drawing>
+    <wp:inline distT="0" distB="0" distL="0" distR="0">
+      <wp:extent cx="${cx}" cy="${cy}"/>
+      <wp:effectExtent l="0" t="0" r="0" b="0"/>
+      <wp:docPr id="${docPrId}" name="Picture ${imageInfo.id}" descr="${escapeXml(img.getAttribute('alt') || '')}"/>
+      <wp:cNvGraphicFramePr>
+        <a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/>
+      </wp:cNvGraphicFramePr>
+      <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+          <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+            <pic:nvPicPr>
+              <pic:cNvPr id="${docPrId}" name="${escapeXml(imageInfo.filename)}"/>
+              <pic:cNvPicPr/>
+            </pic:nvPicPr>
+            <pic:blipFill>
+              <a:blip r:embed="${rId}"/>
+              <a:stretch><a:fillRect/></a:stretch>
+            </pic:blipFill>
+            <pic:spPr>
+              <a:xfrm>
+                <a:off x="0" y="0"/>
+                <a:ext cx="${cx}" cy="${cy}"/>
+              </a:xfrm>
+              <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+            </pic:spPr>
+          </pic:pic>
+        </a:graphicData>
+      </a:graphic>
+    </wp:inline>
+  </w:drawing>`;
+}
+
+function elementToRuns(node, inheritedRPr = '', imageMap = null) {
     if (node.nodeType === 3) {
         const text = node.textContent;
         if (!text) return '';
@@ -744,6 +838,13 @@ function elementToRuns(node, inheritedRPr = '') {
         return `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
     }
     if (tag === 'img') {
+        const src = node.getAttribute('src') || '';
+        if (imageMap && imageMap.has(src)) {
+            const info = imageMap.get(src);
+            const drawing = imageToDrawing(node, info);
+            return `<w:r>${inheritedRPr}${drawing}</w:r>`;
+        }
+        // External image (URL, not data:), fall back to placeholder
         const alt = node.getAttribute('alt') || 'image';
         return `<w:r>${inheritedRPr}<w:t xml:space="preserve">[${escapeXml(alt)}]</w:t></w:r>`;
     }
@@ -754,10 +855,11 @@ function elementToRuns(node, inheritedRPr = '') {
     const ownRPr = cssToRunProps(node);
     const mergedRPr = ownRPr || inheritedRPr;
     let out = '';
-    for (const child of node.childNodes) out += elementToRuns(child, mergedRPr);
+    for (const child of node.childNodes) out += elementToRuns(child, mergedRPr, imageMap);
     return out;
 }
-function elementToParagraph(el) {
+
+function elementToParagraph(el, imageMap = null) {
     const tag = el.tagName ? el.tagName.toUpperCase() : '';
     const styleId = PARA_STYLE_MAP[tag];
     let pPr = '';
@@ -767,16 +869,17 @@ function elementToParagraph(el) {
         const jc = map[el.style.textAlign];
         if (jc) pPr += `<w:jc w:val="${jc}"/>`;
     }
-    const runs = elementToRuns(el, '');
+    const runs = elementToRuns(el, '', imageMap);
     const pPrXml = pPr ? `<w:pPr>${pPr}</w:pPr>` : '';
     return `<w:p>${pPrXml}${runs}</w:p>`;
 }
-function listToListParagraphs(list) {
+
+function listToListParagraphs(list, imageMap = null) {
     const isOrdered = list.tagName.toLowerCase() === 'ol';
     const items = Array.from(list.children).filter(c => c.tagName.toLowerCase() === 'li');
     let out = '';
     items.forEach(li => {
-        const text = elementToRuns(li, '');
+        const text = elementToRuns(li, '', imageMap);
         const numPr = isOrdered
             ? '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr>'
             : '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>';
@@ -784,7 +887,8 @@ function listToListParagraphs(list) {
     });
     return out;
 }
-function tableToOoxml(table) {
+
+function tableToOoxml(table, imageMap = null) {
     const rows = Array.from(table.rows);
     if (!rows.length) return '';
     let out = '<w:tbl>';
@@ -803,7 +907,7 @@ function tableToOoxml(table) {
     for (const row of rows) {
         out += '<w:tr>';
         for (const cell of row.cells) {
-            const runs = elementToRuns(cell, '');
+            const runs = elementToRuns(cell, '', imageMap);
             out += `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p>${runs}</w:p></w:tc>`;
         }
         out += '</w:tr>';
@@ -811,7 +915,8 @@ function tableToOoxml(table) {
     out += '</w:tbl><w:p/>';
     return out;
 }
-function buildDocumentBody(rootEl) {
+
+function buildDocumentBody(rootEl, imageMap = null) {
     let out = '';
     for (const node of Array.from(rootEl.childNodes)) {
         if (node.nodeType === 3) {
@@ -821,20 +926,30 @@ function buildDocumentBody(rootEl) {
         }
         if (node.nodeType !== 1) continue;
         const tag = node.tagName.toLowerCase();
-        if (tag === 'ul' || tag === 'ol') out += listToListParagraphs(node);
-        else if (tag === 'table') out += tableToOoxml(node);
+        if (tag === 'ul' || tag === 'ol') out += listToListParagraphs(node, imageMap);
+        else if (tag === 'table') out += tableToOoxml(node, imageMap);
         else if (tag === 'hr') out += `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:color="888888"/></w:pBdr></w:pPr></w:p>`;
-        else if (tag === 'div' || tag === 'section' || tag === 'article') out += buildDocumentBody(node);
-        else out += elementToParagraph(node);
+        else if (tag === 'div' || tag === 'section' || tag === 'article') out += buildDocumentBody(node, imageMap);
+        else out += elementToParagraph(node, imageMap);
     }
     if (!out.trim()) out = '<w:p/>';
     return out;
 }
-function buildContentTypes() {
+function buildContentTypes(imageExtensions = []) {
+    const uniqueExts = [...new Set(imageExtensions)];
+    let defaults = uniqueExts.map(ext => {
+        const type = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+            : ext === 'gif' ? 'image/gif'
+                : ext === 'svg' ? 'image/svg+xml'
+                    : ext === 'webp' ? 'image/webp'
+                        : 'image/png';
+        return `<Default Extension="${ext}" ContentType="${type}"/>`;
+    }).join('\n  ');
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  ${defaults}
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
@@ -850,11 +965,17 @@ function buildRels() {
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
 </Relationships>`;
 }
-function buildDocumentRels() {
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+function buildDocumentRels(images = new Map()) {
+    let rels = `
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>`;
+    // Add one relationship per image
+    for (const [, info] of images) {
+        rels += `
+  <Relationship Id="rIdImg${info.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${info.filename}"/>`;
+    }
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}
 </Relationships>`;
 }
 function buildStylesXml() {
@@ -896,29 +1017,72 @@ function buildAppXml() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Quickie Docs</Application></Properties>`;
 }
+
 async function generateDocxBlob(title, editorHtml) {
     if (!window.JSZip) throw new Error('JSZip not loaded.');
+
+    // Step 1: parse the HTML
     const temp = document.createElement('div');
     temp.innerHTML = editorHtml || '';
-    const bodyXml = buildDocumentBody(temp);
+
+    // Step 2: pre-load image dimensions by creating Image objects
+    // (naturalWidth/naturalHeight are only known after load)
+    const imgEls = Array.from(temp.querySelectorAll('img'));
+    await Promise.all(imgEls.map(img => new Promise(resolve => {
+        const src = img.getAttribute('src') || '';
+        if (!src.startsWith('data:')) return resolve();
+        if (img.complete && img.naturalWidth) return resolve();
+        const probe = new Image();
+        probe.onload = () => {
+            img.naturalWidth = probe.naturalWidth;
+            img.naturalHeight = probe.naturalHeight;
+            resolve();
+        };
+        probe.onerror = () => resolve();
+        probe.src = src;
+    })));
+
+    // Step 3: extract images + build document body
+    const { images, mediaFiles } = extractImages(temp);
+    const bodyXml = buildDocumentBody(temp, images);
+
+    // Step 4: collect unique extensions for [Content_Types].xml
+    const imageExtensions = [...images.values()].map(i => dataURLToExtension(i.contentType));
+
     const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
   <w:body>
     ${bodyXml}
     <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
   </w:body>
 </w:document>`;
+
+    // Step 5: assemble the ZIP
     const zip = new window.JSZip();
-    zip.file('[Content_Types].xml', buildContentTypes());
+    zip.file('[Content_Types].xml', buildContentTypes(imageExtensions));
     zip.folder('_rels').file('.rels', buildRels());
     const word = zip.folder('word');
     word.file('document.xml', documentXml);
     word.file('styles.xml', buildStylesXml());
     word.file('numbering.xml', buildNumberingXml());
-    word.folder('_rels').file('document.xml.rels', buildDocumentRels());
+    word.folder('_rels').file('document.xml.rels', buildDocumentRels(images));
+
+    // Write each image into word/media/
+    const media = word.folder('media');
+    for (const [filename, bytes] of Object.entries(mediaFiles)) {
+        // filename is like "word/media/image1.png"
+        const base = filename.replace(/^word\/media\//, '');
+        media.file(base, bytes);
+    }
+
     const props = zip.folder('docProps');
     props.file('core.xml', buildCoreXml(title));
     props.file('app.xml', buildAppXml());
+
     return await zip.generateAsync({
         type: 'blob',
         mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -1104,7 +1268,9 @@ function importDOCX(file) {
                         "b => strong", "i => em"
                     ],
                     convertImage: window.mammoth.images.imgElement(img =>
-                        img.read('base64').then(b64 => ({ src: 'data:' + img.contentType + ';base64,' + b64 }))
+                        img.read('base64').then(b64 => ({
+                            src: 'data:' + img.contentType + ';base64,' + b64
+                        }))
                     )
                 }
             );
@@ -1206,12 +1372,9 @@ async function createImportedDoc(filename, html) {
     await dbPut(doc);
     await openDoc(doc.id);
     flashStatus('Imported ✓');
-    // Force-focus on mobile after the file picker closes so typing
-    // immediately works and auto-save kicks in
     setTimeout(() => {
         try {
             editorEl.focus({ preventScroll: false });
-            // Force a save after focus so any initial state is persisted
             scheduleSave();
         } catch (_) { }
     }, 150);
@@ -1650,28 +1813,32 @@ function blobToDataURL(blob) {
     });
 }
 
-// Shared image picker function — used by both the ribbon button
-// and the mobile bar to guarantee the picker opens in a real gesture.
+async function handlePickedImage(file) {
+    if (!file) return;
+    try {
+        const compressed = await compressImage(file);
+        const dataUrl = await blobToDataURL(compressed);
+        runCmd('insertImage', dataUrl);
+        scheduleSave();
+        const saved = Math.max(0, file.size - compressed.size);
+        if (saved > 1024) showToast(`Image compressed — saved ${(saved / 1024).toFixed(0)} KB`);
+    } catch (err) {
+        const reader = new FileReader();
+        reader.onload = () => { runCmd('insertImage', reader.result); scheduleSave(); };
+        reader.readAsDataURL(file);
+    }
+}
+
+if (imagePickerInput) {
+    imagePickerInput.addEventListener('change', () => {
+        const file = imagePickerInput.files?.[0];
+        imagePickerInput.value = '';
+        handlePickedImage(file);
+    });
+}
+
 function openImagePicker() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.onchange = async () => {
-        const file = input.files[0]; if (!file) return;
-        try {
-            const compressed = await compressImage(file);
-            const dataUrl = await blobToDataURL(compressed);
-            runCmd('insertImage', dataUrl);
-            scheduleSave();
-            const saved = Math.max(0, file.size - compressed.size);
-            if (saved > 1024) showToast(`Image compressed — saved ${(saved / 1024).toFixed(0)} KB`);
-        } catch (err) {
-            const reader = new FileReader();
-            reader.onload = () => { runCmd('insertImage', reader.result); scheduleSave(); };
-            reader.readAsDataURL(file);
-        }
-    };
-    input.click();
+    if (imagePickerInput) imagePickerInput.click();
 }
 
 bindAction(document.getElementById('insert-image'), openImagePicker);
@@ -2019,7 +2186,7 @@ document.getElementById('compact-toggle')?.addEventListener('click', () => {
 });
 
 /* =========================================================
-   MOBILE BOTTOM BAR — pointer + touch + click safety net
+   MOBILE BOTTOM BAR
    ========================================================= */
 let lastMobileTapTime = 0;
 let lastMobileTapCmd = null;
@@ -2028,30 +2195,38 @@ function fireMobileBar(btn) {
     if (!btn) return;
     const cmd = btn.dataset.mb;
     if (!cmd) return;
-
     const now = Date.now();
     if (cmd === lastMobileTapCmd && now - lastMobileTapTime < 300) return;
     lastMobileTapTime = now;
     lastMobileTapCmd = cmd;
-
     handleMobileBar(cmd, btn);
 }
+
+// The image button needs a DIRECT handler because iOS only trusts
+// input.click() called from a synchronous, direct handler.
+mobileBar?.addEventListener('touchstart', e => {
+    const btn = e.target.closest('.mb-btn');
+    if (!btn) return;
+
+    // Special-case image: fire the picker directly
+    if (btn.dataset.mb === 'image') {
+        if (imagePickerInput) imagePickerInput.click();
+        return;
+    }
+    fireMobileBar(btn);
+}, { passive: true });
 
 mobileBar?.addEventListener('pointerdown', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
+    if (btn.dataset.mb === 'image') return;   // already handled
     fireMobileBar(btn);
 });
-
-mobileBar?.addEventListener('touchstart', e => {
-    const btn = e.target.closest('.mb-btn');
-    if (!btn) return;
-    fireMobileBar(btn);
-}, { passive: true });
 
 mobileBar?.addEventListener('click', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
+    if (btn.dataset.mb === 'image') return;   // already handled
     fireMobileBar(btn);
 });
 
@@ -2092,7 +2267,6 @@ function handleMobileBar(cmd, btn) {
         case 'alignRight': runCmd('justifyRight'); break;
         case 'alignJustify': runCmd('justifyFull'); break;
 
-        // Direct calls — no synthetic events for these (iOS blocks them)
         case 'image': openImagePicker(); break;
         case 'link': {
             linkUrlInput.value = 'https://';
@@ -2125,7 +2299,7 @@ function handleMobileBar(cmd, btn) {
 }
 
 /* =========================================================
-   MOBILE SHEET — rare tools only + scroll-safe
+   MOBILE SHEET
    ========================================================= */
 let sheetTouchStartX = 0;
 let sheetTouchStartY = 0;
@@ -2357,7 +2531,6 @@ paletteOverlay.addEventListener('click', e => {
     if (e.target === paletteOverlay) closePalette();
 });
 
-/* Helper used by command palette to fire the ribbon buttons */
 function dispatch(id) {
     const el = document.getElementById(id);
     if (!el) return;
