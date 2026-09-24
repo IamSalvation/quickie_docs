@@ -2032,23 +2032,49 @@ document.getElementById('compact-toggle')?.addEventListener('click', () => {
 });
 
 /* =========================================================
-   MOBILE BOTTOM BAR — both rows
+   MOBILE BOTTOM BAR — pointer + touch + click safety net
+   Each button can only fire ONCE per tap, regardless of which
+   event type the browser dispatches first.
    ========================================================= */
+let lastMobileTapTime = 0;
+let lastMobileTapCmd = null;
+
+function fireMobileBar(btn) {
+    if (!btn) return;
+    const cmd = btn.dataset.mb;
+    if (!cmd) return;
+
+    // Debounce: ignore duplicate events from same tap within 300ms
+    const now = Date.now();
+    if (cmd === lastMobileTapCmd && now - lastMobileTapTime < 300) return;
+    lastMobileTapTime = now;
+    lastMobileTapCmd = cmd;
+
+    handleMobileBar(cmd, btn);
+}
+
+// Primary handler — pointerdown (Chrome, Edge, desktop, modern Safari)
 mobileBar?.addEventListener('pointerdown', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
-    e.preventDefault();
-    handleMobileBar(btn.dataset.mb, btn);
+    // Do NOT preventDefault here — let the browser handle touch/click
+    // naturally so the button still gets its visual pressed state.
+    fireMobileBar(btn);
 });
 
-// Fallback for browsers without pointerdown in the mobile bar
+// Fallback — touchstart for older iOS that doesn't fire pointerdown
 mobileBar?.addEventListener('touchstart', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
-    if (e.defaultPrevented) return;
-    e.preventDefault();
-    handleMobileBar(btn.dataset.mb, btn);
-}, { passive: false });
+    fireMobileBar(btn);
+}, { passive: true });
+
+// Final safety net — click
+mobileBar?.addEventListener('click', e => {
+    const btn = e.target.closest('.mb-btn');
+    if (!btn) return;
+    fireMobileBar(btn);
+});
 
 function handleMobileBar(cmd, btn) {
     if (!cmd) return;
