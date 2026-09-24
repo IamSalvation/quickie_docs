@@ -1,9 +1,9 @@
 /* =========================================================
    Quickie Docs — Service Worker
-   v1.4.1 — iOS selection fixes
+   v1.4.2 — Tabbed mobile sheet + scroll-safe touch
    ========================================================= */
 
-const VERSION = 'v1.4.1';
+const VERSION = 'v1.4.2';
 const APP_CACHE = `quickie-docs-app-${VERSION}`;
 const CDN_CACHE = `quickie-docs-cdn-${VERSION}`;
 const RUNTIME_CACHE = `quickie-docs-runtime-${VERSION}`;
@@ -67,7 +67,6 @@ self.addEventListener('fetch', event => {
     const req = event.request;
     if (req.method !== 'GET') return;
     const url = new URL(req.url);
-
     if (url.origin === self.location.origin) {
         event.respondWith(staleWhileRevalidate(req, APP_CACHE));
         return;

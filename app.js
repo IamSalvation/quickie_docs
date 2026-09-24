@@ -1,6 +1,6 @@
 /* =========================================================
-   Quickie Docs — v1.4.1
-   iOS selection fixes + expanded toolbar
+   Quickie Docs — v1.4.2
+   iOS selection fixes + tabbed mobile sheet + scroll-safe touch
    ========================================================= */
 
 // ---------- IndexedDB ----------
@@ -119,7 +119,7 @@ let previewMode = false;
 let toastTimer = null;
 let currentSearch = '';
 let tableMenuTargetCell = null;
-let savedRange = null;              // ← selection memory for iOS
+let savedRange = null;
 let currentFindIndex = 0;
 let findMatches = [];
 const fileHandles = {};
@@ -133,28 +133,21 @@ function flashStatus(text) {
     saveStatus.textContent = text;
     setTimeout(() => { if (saveStatus.textContent === text) saveStatus.textContent = ''; }, 1500);
 }
-
 function isMobile() {
     return window.matchMedia('(max-width: 768px)').matches;
 }
 
 /* =========================================================
    SELECTION MEMORY — critical for iOS Safari
-   Save selection:
-     1. On every selectionchange, ONLY if non-collapsed
-     2. On touchend (fires BEFORE iOS collapses it)
-     3. On mouseup (desktop)
-     4. On blur of the editor
    ========================================================= */
 function saveSelection() {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
     if (!editorEl.contains(range.commonAncestorContainer)) return;
-    if (range.collapsed) return;        // ← critical: never overwrite with cursor-only
+    if (range.collapsed) return;
     savedRange = range.cloneRange();
 }
-
 function restoreSelection() {
     if (!savedRange) return false;
     try {
@@ -163,21 +156,12 @@ function restoreSelection() {
         sel.removeAllRanges();
         sel.addRange(savedRange);
         return true;
-    } catch (_) {
-        return false;
-    }
+    } catch (_) { return false; }
 }
-
 document.addEventListener('selectionchange', () => {
     if (!editorView.classList.contains('hidden')) saveSelection();
 });
-
-// iOS Safari: capture the selection on touchend BEFORE it collapses
-editorEl.addEventListener('touchend', () => {
-    setTimeout(saveSelection, 0);
-}, { passive: true });
-
-// Save on any touch interaction with the editor
+editorEl.addEventListener('touchend', () => { setTimeout(saveSelection, 0); }, { passive: true });
 ['touchstart', 'touchmove', 'touchend'].forEach(ev => {
     editorEl.addEventListener(ev, () => {
         const sel = window.getSelection();
@@ -189,11 +173,7 @@ editorEl.addEventListener('touchend', () => {
         }
     }, { passive: true, capture: true });
 });
-
-// Desktop
-editorEl.addEventListener('mouseup', () => {
-    setTimeout(saveSelection, 0);
-});
+editorEl.addEventListener('mouseup', () => { setTimeout(saveSelection, 0); });
 editorEl.addEventListener('blur', saveSelection);
 
 /* =========================================================
@@ -213,11 +193,9 @@ function toggleTheme() {
     applyTheme(next);
 }
 themeToggle?.addEventListener('click', toggleTheme);
-
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
     if (!localStorage.getItem('quickie-theme')) applyTheme(e.matches ? 'dark' : 'light');
 });
-
 (function initTheme() {
     const saved = localStorage.getItem('quickie-theme');
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -237,7 +215,7 @@ function showToast(message, duration = 5000) {
 function hideToast() { toastEl.classList.add('hidden'); }
 
 /* =========================================================
-   MODAL-BASED PROMPT
+   MODAL PROMPT
    ========================================================= */
 function promptModalOpen({ title = 'Input', message = 'Enter value', value = '', hint = '' } = {}) {
     return new Promise(resolve => {
@@ -248,7 +226,6 @@ function promptModalOpen({ title = 'Input', message = 'Enter value', value = '',
         promptHint.style.display = hint ? 'block' : 'none';
         promptModal.classList.remove('hidden');
         setTimeout(() => { promptInput.focus(); promptInput.select(); }, 40);
-
         const cleanup = () => {
             promptModal.classList.add('hidden');
             promptConfirm.removeEventListener('click', onOk);
@@ -258,7 +235,7 @@ function promptModalOpen({ title = 'Input', message = 'Enter value', value = '',
         };
         const onOk = () => { const v = promptInput.value; cleanup(); resolve(v); };
         const onCancel = () => { cleanup(); resolve(null); };
-        const onKey = (e) => {
+        const onKey = e => {
             if (e.key === 'Enter') { e.preventDefault(); onOk(); }
             if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
         };
@@ -292,18 +269,15 @@ window.addEventListener('appinstalled', () => installBtn?.classList.add('hidden'
    ========================================================= */
 const COLLAPSE_WIDTH = 900;
 const MIN_ITEMS_TO_COLLAPSE = 2;
-
 function updateCollapse() {
     if (!ribbon || isMobile()) return;
     const ribbonWidth = ribbon.clientWidth || window.innerWidth;
     const shouldCollapse = ribbonWidth < COLLAPSE_WIDTH;
-
     document.querySelectorAll('.ribbon-panel .group').forEach(group => {
         const itemCount = group.querySelectorAll(':scope > .group-items > *').length;
         const eligible = itemCount >= MIN_ITEMS_TO_COLLAPSE;
         group.classList.toggle('collapsed', shouldCollapse && eligible);
     });
-
     requestAnimationFrame(() => {
         document.querySelectorAll('.ribbon-panel.active .group').forEach(group => {
             const rect = group.getBoundingClientRect();
@@ -317,7 +291,7 @@ ro.observe(ribbon);
 window.addEventListener('resize', updateCollapse);
 
 /* =========================================================
-   TAB SWITCHING
+   TAB SWITCHING (desktop ribbon)
    ========================================================= */
 document.querySelectorAll('.ribbon-tabs .tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -330,9 +304,10 @@ document.querySelectorAll('.ribbon-tabs .tab').forEach(tab => {
 });
 
 /* =========================================================
-   TABLE TAB AUTO-SHOW
+   TABLE TAB AUTO-SHOW (desktop + mobile sheet)
    ========================================================= */
 const tableTabBtn = document.getElementById('table-tab-btn');
+const sheetTableTab = document.getElementById('sheet-table-tab');
 document.addEventListener('selectionchange', () => {
     if (editorView.classList.contains('hidden')) return;
     const sel = window.getSelection();
@@ -349,10 +324,11 @@ document.addEventListener('selectionchange', () => {
             document.querySelector('.ribbon-tabs .tab[data-tab="home"]')?.click();
         }
     }
+    if (sheetTableTab) sheetTableTab.style.display = inTable ? '' : 'none';
 });
 
 /* =========================================================
-   EXEC CMD HELPER
+   EXEC CMD
    ========================================================= */
 function runCmd(cmd, value = null) {
     restoreSelection();
@@ -364,12 +340,10 @@ function runCmd(cmd, value = null) {
 }
 
 /* =========================================================
-   POINTER HANDLER — iOS-safe
-   Uses touchstart on touch devices so selection isn't stolen.
+   POINTER HANDLER (iOS-safe)
    ========================================================= */
 function attachPointerHandler(el, handler) {
     let handled = false;
-
     el.addEventListener('touchstart', e => {
         e.preventDefault();
         e.stopPropagation();
@@ -377,7 +351,6 @@ function attachPointerHandler(el, handler) {
         handler(e);
         setTimeout(() => { handled = false; }, 400);
     }, { passive: false });
-
     el.addEventListener('pointerdown', e => {
         if (handled) return;
         if (e.pointerType === 'touch') return;
@@ -386,8 +359,6 @@ function attachPointerHandler(el, handler) {
         handler(e);
     });
 }
-
-// All buttons with data-cmd (ribbon)
 document.querySelectorAll('button[data-cmd]').forEach(btn => {
     attachPointerHandler(btn, () => {
         runCmd(btn.dataset.cmd, btn.dataset.value || null);
@@ -396,38 +367,29 @@ document.querySelectorAll('button[data-cmd]').forEach(btn => {
 });
 
 /* =========================================================
-   DROPDOWN ITEMS — iOS-safe handler
+   DROPDOWN ITEMS
    ========================================================= */
 function handleDropdownItem(li, e) {
     if (!li) return;
     if (e) { e.preventDefault(); e.stopPropagation(); }
     li.closest('.group-dropdown')?.classList.remove('open');
-
     restoreSelection();
-
-    if (li.dataset.targetCmd) {
-        runCmd(li.dataset.targetCmd, li.dataset.targetValue || null);
-    } else if (li.dataset.targetId) {
+    if (li.dataset.targetCmd) runCmd(li.dataset.targetCmd, li.dataset.targetValue || null);
+    else if (li.dataset.targetId) {
         const target = document.getElementById(li.dataset.targetId);
-        if (target) {
-            target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-        }
+        if (target) target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     }
     updateToolbarState();
     saveSelection();
 }
-
 ribbon.addEventListener('touchstart', e => {
     const li = e.target.closest('.group-dropdown li');
     if (li) handleDropdownItem(li, e);
 }, { passive: false });
-
 ribbon.addEventListener('click', e => {
     const li = e.target.closest('.group-dropdown li');
     if (li) handleDropdownItem(li, e);
 });
-
-// Collapse button
 ribbon.addEventListener('click', e => {
     const collapseBtn = e.target.closest('.group-collapsed-btn');
     if (collapseBtn) {
@@ -439,7 +401,6 @@ ribbon.addEventListener('click', e => {
         if (!wasOpen) dropdown.classList.add('open');
     }
 });
-
 document.addEventListener('click', e => {
     if (!e.target.closest('.group')) {
         document.querySelectorAll('.group-dropdown.open').forEach(d => d.classList.remove('open'));
@@ -457,11 +418,9 @@ function stripHTML(html) {
     tmp.innerHTML = html || '';
     return (tmp.textContent || tmp.innerText || '').replace(/\s+/g, ' ').trim();
 }
-
 async function renderList() {
     const docs = await dbGetAll();
     docs.sort((a, b) => b.updatedAt - a.updatedAt);
-
     const q = currentSearch.trim().toLowerCase();
     const filtered = q
         ? docs.filter(d =>
@@ -469,7 +428,6 @@ async function renderList() {
             stripHTML(d.content).toLowerCase().includes(q)
         )
         : docs;
-
     docList.innerHTML = '';
     if (docs.length === 0) {
         emptyMsg.style.display = 'block';
@@ -478,19 +436,15 @@ async function renderList() {
     }
     emptyMsg.style.display = 'none';
     noResultsMsg.style.display = filtered.length === 0 ? 'block' : 'none';
-
     for (const doc of filtered) {
         const li = document.createElement('li');
         li.dataset.id = doc.id;
-
         const info = document.createElement('div');
         info.className = 'doc-info';
-
         const name = document.createElement('div');
         name.className = 'doc-name';
         name.textContent = doc.title || 'Untitled';
         name.title = 'Double-click to rename';
-
         name.addEventListener('dblclick', e => {
             e.stopPropagation();
             name.contentEditable = 'true';
@@ -513,9 +467,7 @@ async function renderList() {
             if (e.key === 'Enter') { e.preventDefault(); name.blur(); }
             if (e.key === 'Escape') { name.textContent = doc.title || 'Untitled'; name.blur(); }
         });
-
         info.appendChild(name);
-
         if (q) {
             const preview = stripHTML(doc.content);
             if (preview) {
@@ -525,19 +477,16 @@ async function renderList() {
                 if (idx >= 0) {
                     const start = Math.max(0, idx - 30);
                     const end = Math.min(preview.length, idx + q.length + 40);
-                    snippet.textContent =
-                        (start > 0 ? '…' : '') + preview.slice(start, end) + (end < preview.length ? '…' : '');
+                    snippet.textContent = (start > 0 ? '…' : '') + preview.slice(start, end) + (end < preview.length ? '…' : '');
                 } else {
                     snippet.textContent = preview.slice(0, 80) + (preview.length > 80 ? '…' : '');
                 }
                 info.appendChild(snippet);
             }
         }
-
         const meta = document.createElement('span');
         meta.className = 'doc-meta';
         meta.textContent = formatDate(doc.updatedAt);
-
         const del = document.createElement('button');
         del.className = 'delete-btn';
         del.textContent = '×';
@@ -548,7 +497,6 @@ async function renderList() {
             await dbDelete(doc.id);
             renderList();
         });
-
         li.appendChild(info);
         li.appendChild(meta);
         li.appendChild(del);
@@ -556,7 +504,6 @@ async function renderList() {
         docList.appendChild(li);
     }
 }
-
 let searchDebounce;
 searchInput?.addEventListener('input', e => {
     currentSearch = e.target.value;
@@ -619,7 +566,6 @@ async function saveNow() {
     await dbPut(currentDoc);
     flashStatus('Saved ✓');
 }
-
 function saveBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -635,13 +581,11 @@ function escapeXml(s) {
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
-
 const PARA_STYLE_MAP = {
     H1: 'Heading1', H2: 'Heading2', H3: 'Heading3', H4: 'Heading4',
     H5: 'Heading5', H6: 'Heading6',
     BLOCKQUOTE: 'Quote', PRE: 'Code'
 };
-
 function rgbToHex(rgb) {
     if (!rgb) return null;
     if (rgb.startsWith('#')) return rgb.slice(1).toUpperCase().padStart(6, '0');
@@ -655,17 +599,14 @@ function pxToHalfPt(px) {
     if (isNaN(n)) return null;
     return Math.round(n * 1.5);
 }
-
 function cssToRunProps(el) {
     const style = (el.style && el.style.cssText) ? el.style : null;
     let rPr = '';
     const tag = (el.tagName || '').toLowerCase();
-
     const isBold = tag === 'b' || tag === 'strong' || (style && style.fontWeight && /bold|[6-9]00/.test(style.fontWeight));
     const isItalic = tag === 'i' || tag === 'em' || (style && style.fontStyle === 'italic');
     const isUnderline = tag === 'u' || (style && style.textDecoration && style.textDecoration.includes('underline'));
     const isStrike = tag === 's' || tag === 'strike' || tag === 'del' || (style && style.textDecoration && style.textDecoration.includes('line-through'));
-
     if (isBold) rPr += '<w:b/>';
     if (isItalic) rPr += '<w:i/>';
     if (isUnderline) rPr += '<w:u w:val="single"/>';
@@ -688,7 +629,6 @@ function cssToRunProps(el) {
     }
     return rPr ? `<w:rPr>${rPr}</w:rPr>` : '';
 }
-
 function elementToRuns(node, inheritedRPr = '') {
     if (node.nodeType === 3) {
         const text = node.textContent;
@@ -717,7 +657,6 @@ function elementToRuns(node, inheritedRPr = '') {
     for (const child of node.childNodes) out += elementToRuns(child, mergedRPr);
     return out;
 }
-
 function elementToParagraph(el) {
     const tag = el.tagName ? el.tagName.toUpperCase() : '';
     const styleId = PARA_STYLE_MAP[tag];
@@ -732,7 +671,6 @@ function elementToParagraph(el) {
     const pPrXml = pPr ? `<w:pPr>${pPr}</w:pPr>` : '';
     return `<w:p>${pPrXml}${runs}</w:p>`;
 }
-
 function listToListParagraphs(list) {
     const isOrdered = list.tagName.toLowerCase() === 'ol';
     const items = Array.from(list.children).filter(c => c.tagName.toLowerCase() === 'li');
@@ -746,7 +684,6 @@ function listToListParagraphs(list) {
     });
     return out;
 }
-
 function tableToOoxml(table) {
     const rows = Array.from(table.rows);
     if (!rows.length) return '';
@@ -774,7 +711,6 @@ function tableToOoxml(table) {
     out += '</w:tbl><w:p/>';
     return out;
 }
-
 function buildDocumentBody(rootEl) {
     let out = '';
     for (const node of Array.from(rootEl.childNodes)) {
@@ -794,7 +730,6 @@ function buildDocumentBody(rootEl) {
     if (!out.trim()) out = '<w:p/>';
     return out;
 }
-
 function buildContentTypes() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -861,7 +796,6 @@ function buildAppXml() {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Quickie Docs</Application></Properties>`;
 }
-
 async function generateDocxBlob(title, editorHtml) {
     if (!window.JSZip) throw new Error('JSZip not loaded.');
     const temp = document.createElement('div');
@@ -968,7 +902,6 @@ async function performSaveAs(type, filename) {
     if (!currentDoc) return;
     const { mime, ext, description } = getMimeAndExt(type);
     const finalName = (filename || currentDoc.title || 'Untitled').trim() + ext;
-
     let blob;
     try { blob = await getBlobForType(type, filename); }
     catch (err) {
@@ -976,7 +909,6 @@ async function performSaveAs(type, filename) {
         showToast('Could not generate file. Try a different format.');
         return;
     }
-
     if (window.showSaveFilePicker) {
         try {
             const handle = await window.showSaveFilePicker({
@@ -994,14 +926,12 @@ async function performSaveAs(type, filename) {
             console.warn('showSaveFilePicker failed:', err);
         }
     }
-
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = finalName; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     showToast(`Downloaded ${finalName}`);
 }
-
 function openSaveAsModal() {
     if (!currentDoc) return;
     saveAsName.value = (currentDoc.title || 'Untitled').replace(/[^\w\-. ]+/g, '_');
@@ -1111,10 +1041,7 @@ async function extractPlainTextFromDocx(arrayBuffer) {
         const text = lines.join('\n').trim();
         if (!text) return '';
         return text.split(/\n{2,}/).map(p => `<p>${escapeHTML(p).replace(/\n/g, '<br>')}</p>`).join('');
-    } catch (err) {
-        console.error('Raw extraction failed:', err);
-        return '';
-    }
+    } catch (err) { return ''; }
 }
 function importHTML(file) {
     const reader = new FileReader();
@@ -1273,13 +1200,12 @@ function bindFontControls(familyId, sizeId) {
 bindFontControls('font-family', 'font-size');
 bindFontControls('font-family-compact', 'font-size-compact');
 
-// Font size +/- buttons
+// Font size +/-
 document.getElementById('font-size-up')?.addEventListener('touchstart', e => {
     e.preventDefault();
     const sel = document.getElementById('font-size');
-    const idx = sel.selectedIndex;
-    if (idx < sel.options.length - 1) {
-        sel.selectedIndex = idx + 1;
+    if (sel.selectedIndex < sel.options.length - 1) {
+        sel.selectedIndex++;
         applyFontSize(parseInt(sel.value, 10));
         scheduleSave();
     }
@@ -1287,9 +1213,8 @@ document.getElementById('font-size-up')?.addEventListener('touchstart', e => {
 document.getElementById('font-size-down')?.addEventListener('touchstart', e => {
     e.preventDefault();
     const sel = document.getElementById('font-size');
-    const idx = sel.selectedIndex;
-    if (idx > 0) {
-        sel.selectedIndex = idx - 1;
+    if (sel.selectedIndex > 0) {
+        sel.selectedIndex--;
         applyFontSize(parseInt(sel.value, 10));
         scheduleSave();
     }
@@ -1298,9 +1223,8 @@ document.getElementById('font-size-up')?.addEventListener('pointerdown', e => {
     if (e.pointerType === 'touch') return;
     e.preventDefault();
     const sel = document.getElementById('font-size');
-    const idx = sel.selectedIndex;
-    if (idx < sel.options.length - 1) {
-        sel.selectedIndex = idx + 1;
+    if (sel.selectedIndex < sel.options.length - 1) {
+        sel.selectedIndex++;
         applyFontSize(parseInt(sel.value, 10));
         scheduleSave();
     }
@@ -1309,9 +1233,8 @@ document.getElementById('font-size-down')?.addEventListener('pointerdown', e => 
     if (e.pointerType === 'touch') return;
     e.preventDefault();
     const sel = document.getElementById('font-size');
-    const idx = sel.selectedIndex;
-    if (idx > 0) {
-        sel.selectedIndex = idx - 1;
+    if (sel.selectedIndex > 0) {
+        sel.selectedIndex--;
         applyFontSize(parseInt(sel.value, 10));
         scheduleSave();
     }
@@ -1320,16 +1243,6 @@ document.getElementById('font-size-down')?.addEventListener('pointerdown', e => 
 /* =========================================================
    TEXT CASE
    ========================================================= */
-document.getElementById('text-case-btn')?.addEventListener('touchstart', e => {
-    e.preventDefault();
-    openTextCasePrompt();
-}, { passive: false });
-document.getElementById('text-case-btn')?.addEventListener('pointerdown', e => {
-    if (e.pointerType === 'touch') return;
-    e.preventDefault();
-    openTextCasePrompt();
-});
-
 async function openTextCasePrompt() {
     const sel = window.getSelection();
     if (!sel.rangeCount || sel.isCollapsed) {
@@ -1355,6 +1268,7 @@ async function openTextCasePrompt() {
     runCmd('insertText', next);
     scheduleSave();
 }
+attachPointerHandler(document.getElementById('text-case-btn'), openTextCasePrompt);
 
 /* =========================================================
    COLOR PICKERS
@@ -1373,8 +1287,7 @@ function buildColorGrids() {
             b.style.background = color;
             b.title = color;
             b.addEventListener('touchstart', e => {
-                e.preventDefault();
-                e.stopPropagation();
+                e.preventDefault(); e.stopPropagation();
                 applyColor(kind === 'text' ? 'foreColor' : 'hiliteColor', color);
                 closeAllColorMenus();
             }, { passive: false });
@@ -1415,7 +1328,6 @@ function initColorPickers() {
         const menu = picker.querySelector('.color-menu');
         const native = picker.querySelector('input[type="color"]');
         const customBtn = picker.querySelector('.color-custom');
-
         attachPointerHandler(mainBtn, () => {
             const current = picker.querySelector('.color-letter').style.borderBottomColor || '#1f2328';
             applyColor(command, current);
@@ -1425,10 +1337,7 @@ function initColorPickers() {
             closeAllColorMenus();
             if (wasHidden) menu.classList.remove('hidden');
         });
-        customBtn?.addEventListener('touchstart', e => {
-            e.preventDefault();
-            native.click();
-        }, { passive: false });
+        customBtn?.addEventListener('touchstart', e => { e.preventDefault(); native.click(); }, { passive: false });
         customBtn?.addEventListener('click', () => native.click());
         native?.addEventListener('input', e => { applyColor(command, e.target.value); closeAllColorMenus(); });
         menu?.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
@@ -1441,12 +1350,7 @@ initColorPickers();
 /* =========================================================
    CLEAR / LINE HEIGHT
    ========================================================= */
-document.getElementById('clear-format')?.addEventListener('touchstart', e => {
-    e.preventDefault();
-    runCmd('removeFormat');
-    scheduleSave();
-}, { passive: false });
-document.getElementById('clear-format')?.addEventListener('click', () => {
+attachPointerHandler(document.getElementById('clear-format'), () => {
     runCmd('removeFormat');
     scheduleSave();
 });
@@ -1491,7 +1395,6 @@ bindAction(document.getElementById('insert-link'), () => {
     linkModal.classList.remove('hidden');
     setTimeout(() => linkUrlInput.focus(), 40);
 });
-
 linkModalClose?.addEventListener('click', () => linkModal.classList.add('hidden'));
 linkModalCancel?.addEventListener('click', () => linkModal.classList.add('hidden'));
 linkModalConfirm?.addEventListener('click', () => {
@@ -1502,8 +1405,7 @@ linkModalConfirm?.addEventListener('click', () => {
     if (sel.toString() && editorEl.contains(sel.anchorNode)) {
         runCmd('createLink', url);
     } else {
-        const text = label || url;
-        runCmd('insertHTML', `<a href="${url}" target="_blank" rel="noopener">${text}</a>`);
+        runCmd('insertHTML', `<a href="${url}" target="_blank" rel="noopener">${label || url}</a>`);
     }
     linkModal.classList.add('hidden');
     scheduleSave();
@@ -1694,7 +1596,6 @@ function runTableAction(action, cell) {
     if (!row || !table) return;
     const idx = Array.from(row.children).indexOf(cell);
     const newCell = () => { const td = document.createElement('td'); td.innerHTML = '<br>'; return td; };
-
     switch (action) {
         case 'row-above': {
             const nr = row.cloneNode(false);
@@ -1850,10 +1751,7 @@ function performFind() {
         }
     }
     findCount.textContent = `${findMatches.length} match${findMatches.length === 1 ? '' : 'es'}`;
-    if (findMatches.length) {
-        currentFindIndex = 0;
-        highlightMatch();
-    }
+    if (findMatches.length) { currentFindIndex = 0; highlightMatch(); }
 }
 function moveFind(dir) {
     if (!findMatches.length) return;
@@ -2017,7 +1915,6 @@ mobileBar?.addEventListener('click', e => {
     if (!btn) return;
     handleMobileBar(btn.dataset.mb);
 });
-
 function handleMobileBar(cmd) {
     switch (cmd) {
         case 'undo': runCmd('undo'); break;
@@ -2027,51 +1924,194 @@ function handleMobileBar(cmd) {
         case 'underline': runCmd('underline'); break;
         case 'heading': runCmd('formatBlock', 'H2'); break;
         case 'bullet': runCmd('insertUnorderedList'); break;
-        case 'more': mobileSheet.classList.remove('hidden'); return;
+        case 'more': openMobileSheet(); return;
     }
     updateToolbarState();
 }
 
-mobileSheetClose?.addEventListener('click', () => mobileSheet.classList.add('hidden'));
+/* =========================================================
+   MOBILE SHEET — TABBED + SCROLL-SAFE
+   ========================================================= */
+let sheetTouchStartX = 0;
+let sheetTouchStartY = 0;
+let sheetTouchMoved = false;
+
+mobileSheet?.querySelectorAll('.sheet-tab').forEach(tab => {
+    tab.addEventListener('touchstart', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        switchSheetTab(tab.dataset.sheetTab);
+    }, { passive: false });
+    tab.addEventListener('click', e => {
+        e.stopPropagation();
+        switchSheetTab(tab.dataset.sheetTab);
+    });
+});
+
+function switchSheetTab(name) {
+    if (!name) return;
+    mobileSheet.querySelectorAll('.sheet-tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.sheetTab === name)
+    );
+    mobileSheet.querySelectorAll('.sheet-panel').forEach(p =>
+        p.classList.toggle('active', p.dataset.sheetPanel === name)
+    );
+    try { sessionStorage.setItem('quickie-sheet-tab', name); } catch (_) { }
+}
 
 mobileSheet?.addEventListener('touchstart', e => {
     const btn = e.target.closest('.sheet-btn');
+    const tab = e.target.closest('.sheet-tab');
+    if (!btn && !tab) return;
+    e.preventDefault();
+    sheetTouchStartX = e.touches[0].clientX;
+    sheetTouchStartY = e.touches[0].clientY;
+    sheetTouchMoved = false;
+}, { passive: false });
+
+mobileSheet?.addEventListener('touchmove', e => {
+    if (!e.touches.length) return;
+    const dx = Math.abs(e.touches[0].clientX - sheetTouchStartX);
+    const dy = Math.abs(e.touches[0].clientY - sheetTouchStartY);
+    if (dx > 10 || dy > 10) sheetTouchMoved = true;
+}, { passive: true });
+
+mobileSheet?.addEventListener('touchend', e => {
+    const btn = e.target.closest('.sheet-btn');
     if (!btn) return;
+    if (sheetTouchMoved) return;
     e.preventDefault();
     handleSheetAction(btn.dataset.sheet);
 }, { passive: false });
+
 mobileSheet?.addEventListener('click', e => {
     const btn = e.target.closest('.sheet-btn');
     if (!btn) return;
+    if (sheetTouchMoved) return;
     handleSheetAction(btn.dataset.sheet);
 });
 
 function handleSheetAction(action) {
+    if (!action) return;
     mobileSheet.classList.add('hidden');
+    const dispatch = id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        el.dispatchEvent(new Event('click', { bubbles: true }));
+    };
     switch (action) {
+        // History
+        case 'undo': runCmd('undo'); break;
+        case 'redo': runCmd('redo'); break;
+        // Font
+        case 'bold': runCmd('bold'); break;
+        case 'italic': runCmd('italic'); break;
+        case 'underline': runCmd('underline'); break;
         case 'strikeThrough': runCmd('strikeThrough'); break;
         case 'superscript': runCmd('superscript'); break;
         case 'subscript': runCmd('subscript'); break;
+        case 'textCase': openTextCasePrompt(); break;
+        case 'textColor': {
+            const native = document.querySelector('.color-picker[data-color-target="foreColor"] input[type="color"]');
+            if (native) native.click();
+            break;
+        }
+        case 'highlight': {
+            const native = document.querySelector('.color-picker[data-color-target="hiliteColor"] input[type="color"]');
+            if (native) native.click();
+            break;
+        }
+        case 'clearFormat': runCmd('removeFormat'); break;
+        // Paragraph
+        case 'bullet': runCmd('insertUnorderedList'); break;
         case 'ordered': runCmd('insertOrderedList'); break;
-        case 'tasklist': document.getElementById('insert-tasklist')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'quote': document.getElementById('insert-quote')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'code': document.getElementById('insert-code')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'link': document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'image': document.getElementById('insert-image')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'table': document.getElementById('insert-table')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'hr': runCmd('insertHorizontalRule'); break;
-        case 'date': document.getElementById('insert-date')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'toc': document.getElementById('insert-toc')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'footnote': document.getElementById('insert-footnote')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'bookmark': document.getElementById('insert-bookmark')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
-        case 'clear': runCmd('removeFormat'); break;
+        case 'tasklist': dispatch('insert-tasklist'); break;
+        case 'outdent': runCmd('outdent'); break;
+        case 'indent': runCmd('indent'); break;
+        case 'alignLeft': runCmd('justifyLeft'); break;
+        case 'alignCenter': runCmd('justifyCenter'); break;
+        case 'alignRight': runCmd('justifyRight'); break;
+        case 'alignJustify': runCmd('justifyFull'); break;
+        // Styles
+        case 'h1': runCmd('formatBlock', 'H1'); break;
+        case 'h2': runCmd('formatBlock', 'H2'); break;
+        case 'h3': runCmd('formatBlock', 'H3'); break;
+        case 'normal': runCmd('formatBlock', 'P'); break;
+        case 'quoteStyle': runCmd('formatBlock', 'BLOCKQUOTE'); break;
+        case 'codeStyle': runCmd('formatBlock', 'PRE'); break;
+        // Editing
         case 'find': openFind(false); break;
+        case 'replace': openFind(true); break;
+        case 'wordcount': showWordCount(); break;
+        // Insert
+        case 'pagebreak': dispatch('insert-pagebreak'); break;
+        case 'pagenum': dispatch('insert-pagenum'); break;
+        case 'table': dispatch('insert-table'); break;
+        case 'image': dispatch('insert-image'); break;
+        case 'shape': dispatch('insert-shape'); break;
+        case 'link': dispatch('insert-link'); break;
+        case 'bookmark': dispatch('insert-bookmark'); break;
+        case 'emoji': dispatch('insert-emoji'); break;
+        case 'symbol': dispatch('insert-symbol'); break;
+        case 'date': dispatch('insert-date'); break;
+        case 'datetime': dispatch('insert-datetime'); break;
+        case 'hr': dispatch('insert-hr'); break;
+        case 'toc': dispatch('insert-toc'); break;
+        case 'footnote': dispatch('insert-footnote'); break;
+        case 'quoteInsert': dispatch('insert-quote'); break;
+        case 'codeInsert': dispatch('insert-code'); break;
+        // Table
+        case 'rowAbove':
+        case 'rowBelow':
+        case 'rowDelete':
+        case 'colLeft':
+        case 'colRight':
+        case 'colDelete':
+        case 'merge':
+        case 'tableDelete': {
+            const cell = tableMenuTargetCell || getCurrentTableCell();
+            const map = {
+                rowAbove: 'row-above', rowBelow: 'row-below', rowDelete: 'row-delete',
+                colLeft: 'col-left', colRight: 'col-right', colDelete: 'col-delete',
+                merge: 'merge', tableDelete: 'table-delete'
+            };
+            if (cell) runTableAction(map[action], cell);
+            break;
+        }
+        // Review
+        case 'spellcheck': dispatch('spellcheck-btn'); break;
+        case 'thesaurus': dispatch('thesaurus-btn'); break;
+        case 'readingtime': showReadingTime(); break;
+        case 'charfreq': showCharFreq(); break;
+        case 'comment': dispatch('comment-btn'); break;
+        // View
+        case 'theme': toggleTheme(); break;
+        case 'preview': dispatch('preview-btn'); break;
+        case 'fullscreen': dispatch('fullscreen-btn'); break;
+        case 'print': printDoc(); break;
+        // File
         case 'save': saveNow(); break;
         case 'saveas': openSaveAsModal(); break;
         case 'back': saveNow().then(showList); break;
     }
     updateToolbarState();
 }
+
+function openMobileSheet() {
+    let defaultTab = 'home';
+    const inTable = !!getCurrentTableCell();
+    if (inTable) defaultTab = 'table';
+    else {
+        try {
+            const saved = sessionStorage.getItem('quickie-sheet-tab');
+            if (saved && ['home', 'insert', 'review', 'view'].includes(saved)) defaultTab = saved;
+        } catch (_) { }
+    }
+    switchSheetTab(defaultTab);
+    mobileSheet.classList.remove('hidden');
+}
+mobileSheetClose?.addEventListener('click', () => mobileSheet.classList.add('hidden'));
 
 /* =========================================================
    FILE MENU
@@ -2094,7 +2134,6 @@ document.querySelector('.file-menu-row')?.addEventListener('click', e => {
 const paletteOverlay = document.getElementById('palette-overlay');
 const paletteInput = document.getElementById('palette-input');
 const paletteList = document.getElementById('palette-list');
-
 const COMMANDS = [
     { name: 'Bold', icon: 'B', run: () => runCmd('bold') },
     { name: 'Italic', icon: 'I', run: () => runCmd('italic') },
@@ -2146,10 +2185,8 @@ const COMMANDS = [
     { name: 'Toggle Compact Toolbar', icon: '⇕', run: () => document.getElementById('compact-toggle')?.click() },
     { name: 'Install App', icon: '📲', run: () => installBtn?.click() },
 ];
-
 let paletteSelection = 0;
 let paletteFiltered = COMMANDS;
-
 function openPalette() {
     paletteOverlay.classList.remove('hidden');
     paletteInput.value = '';
@@ -2222,11 +2259,9 @@ document.addEventListener('keydown', e => {
     );
     const inModal = target && target.closest && target.closest('.modal-overlay');
     if (isTextInput && !inModal) return;
-
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
     if (!mod) return;
-
     if (e.shiftKey) {
         if (key === 'p') { e.preventDefault(); e.stopPropagation(); openPalette(); return; }
         if (key === 'd') { e.preventDefault(); e.stopPropagation(); toggleTheme(); return; }
@@ -2234,7 +2269,6 @@ document.addEventListener('keydown', e => {
         if (key === 'o') { e.preventDefault(); e.stopPropagation(); pickAndImport(); return; }
         return;
     }
-
     switch (key) {
         case 's': e.preventDefault(); e.stopPropagation(); saveNow(); return;
         case 'b': e.preventDefault(); e.stopPropagation(); runCmd('bold'); updateToolbarState(); return;
@@ -2259,7 +2293,6 @@ document.addEventListener('keydown', e => {
             return;
     }
 }, true);
-
 window.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') e.preventDefault();
 }, true);
@@ -2292,7 +2325,6 @@ newDocBtn.addEventListener('click', createDoc);
 backBtn.addEventListener('click', async () => { await saveNow(); showList(); });
 titleInput.addEventListener('input', scheduleSave);
 editorEl.addEventListener('input', scheduleSave);
-
 document.addEventListener('keydown', e => {
     if (editorView.classList.contains('hidden') && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
