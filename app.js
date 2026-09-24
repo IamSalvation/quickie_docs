@@ -1,6 +1,6 @@
 /* =========================================================
-   Quickie Docs — v1.4.0
-   Mobile fixes + expanded toolbar + table auto-tab
+   Quickie Docs — v1.4.1
+   iOS selection fixes + expanded toolbar
    ========================================================= */
 
 // ---------- IndexedDB ----------
@@ -119,10 +119,9 @@ let previewMode = false;
 let toastTimer = null;
 let currentSearch = '';
 let tableMenuTargetCell = null;
-let savedRange = null;              // ← selection memory for mobile
+let savedRange = null;              // ← selection memory for iOS
 let currentFindIndex = 0;
 let findMatches = [];
-let lastFocusedElement = null;
 const fileHandles = {};
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -135,27 +134,31 @@ function flashStatus(text) {
     setTimeout(() => { if (saveStatus.textContent === text) saveStatus.textContent = ''; }, 1500);
 }
 
-/* =========================================================
-   MOBILE DETECTION
-   ========================================================= */
 function isMobile() {
     return window.matchMedia('(max-width: 768px)').matches;
 }
 
 /* =========================================================
-   SELECTION MEMORY (critical for mobile)
+   SELECTION MEMORY — critical for iOS Safari
+   Save selection:
+     1. On every selectionchange, ONLY if non-collapsed
+     2. On touchend (fires BEFORE iOS collapses it)
+     3. On mouseup (desktop)
+     4. On blur of the editor
    ========================================================= */
 function saveSelection() {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
-    if (editorEl.contains(range.commonAncestorContainer)) {
-        savedRange = range.cloneRange();
-    }
+    if (!editorEl.contains(range.commonAncestorContainer)) return;
+    if (range.collapsed) return;        // ← critical: never overwrite with cursor-only
+    savedRange = range.cloneRange();
 }
+
 function restoreSelection() {
     if (!savedRange) return false;
     try {
+        editorEl.focus({ preventScroll: true });
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(savedRange);
@@ -164,9 +167,34 @@ function restoreSelection() {
         return false;
     }
 }
+
 document.addEventListener('selectionchange', () => {
     if (!editorView.classList.contains('hidden')) saveSelection();
 });
+
+// iOS Safari: capture the selection on touchend BEFORE it collapses
+editorEl.addEventListener('touchend', () => {
+    setTimeout(saveSelection, 0);
+}, { passive: true });
+
+// Save on any touch interaction with the editor
+['touchstart', 'touchmove', 'touchend'].forEach(ev => {
+    editorEl.addEventListener(ev, () => {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+            const range = sel.getRangeAt(0);
+            if (!range.collapsed && editorEl.contains(range.commonAncestorContainer)) {
+                savedRange = range.cloneRange();
+            }
+        }
+    }, { passive: true, capture: true });
+});
+
+// Desktop
+editorEl.addEventListener('mouseup', () => {
+    setTimeout(saveSelection, 0);
+});
+editorEl.addEventListener('blur', saveSelection);
 
 /* =========================================================
    THEME
@@ -209,7 +237,7 @@ function showToast(message, duration = 5000) {
 function hideToast() { toastEl.classList.add('hidden'); }
 
 /* =========================================================
-   MODAL-BASED PROMPT (replaces native prompt() for mobile)
+   MODAL-BASED PROMPT
    ========================================================= */
 function promptModalOpen({ title = 'Input', message = 'Enter value', value = '', hint = '' } = {}) {
     return new Promise(resolve => {
@@ -289,7 +317,7 @@ ro.observe(ribbon);
 window.addEventListener('resize', updateCollapse);
 
 /* =========================================================
-   RIBBON: TAB SWITCHING
+   TAB SWITCHING
    ========================================================= */
 document.querySelectorAll('.ribbon-tabs .tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -324,8 +352,82 @@ document.addEventListener('selectionchange', () => {
 });
 
 /* =========================================================
-   RIBBON: GROUP COLLAPSED DROPDOWNS + execCommand
+   EXEC CMD HELPER
    ========================================================= */
+function runCmd(cmd, value = null) {
+    restoreSelection();
+    try { document.execCommand('styleWithCSS', false, true); } catch (_) { }
+    try { document.execCommand(cmd, false, value); } catch (err) {
+        console.warn('execCommand failed:', cmd, err);
+    }
+    setTimeout(saveSelection, 0);
+}
+
+/* =========================================================
+   POINTER HANDLER — iOS-safe
+   Uses touchstart on touch devices so selection isn't stolen.
+   ========================================================= */
+function attachPointerHandler(el, handler) {
+    let handled = false;
+
+    el.addEventListener('touchstart', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        handled = true;
+        handler(e);
+        setTimeout(() => { handled = false; }, 400);
+    }, { passive: false });
+
+    el.addEventListener('pointerdown', e => {
+        if (handled) return;
+        if (e.pointerType === 'touch') return;
+        e.preventDefault();
+        e.stopPropagation();
+        handler(e);
+    });
+}
+
+// All buttons with data-cmd (ribbon)
+document.querySelectorAll('button[data-cmd]').forEach(btn => {
+    attachPointerHandler(btn, () => {
+        runCmd(btn.dataset.cmd, btn.dataset.value || null);
+        updateToolbarState();
+    });
+});
+
+/* =========================================================
+   DROPDOWN ITEMS — iOS-safe handler
+   ========================================================= */
+function handleDropdownItem(li, e) {
+    if (!li) return;
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    li.closest('.group-dropdown')?.classList.remove('open');
+
+    restoreSelection();
+
+    if (li.dataset.targetCmd) {
+        runCmd(li.dataset.targetCmd, li.dataset.targetValue || null);
+    } else if (li.dataset.targetId) {
+        const target = document.getElementById(li.dataset.targetId);
+        if (target) {
+            target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        }
+    }
+    updateToolbarState();
+    saveSelection();
+}
+
+ribbon.addEventListener('touchstart', e => {
+    const li = e.target.closest('.group-dropdown li');
+    if (li) handleDropdownItem(li, e);
+}, { passive: false });
+
+ribbon.addEventListener('click', e => {
+    const li = e.target.closest('.group-dropdown li');
+    if (li) handleDropdownItem(li, e);
+});
+
+// Collapse button
 ribbon.addEventListener('click', e => {
     const collapseBtn = e.target.closest('.group-collapsed-btn');
     if (collapseBtn) {
@@ -335,18 +437,6 @@ ribbon.addEventListener('click', e => {
         const wasOpen = dropdown.classList.contains('open');
         document.querySelectorAll('.group-dropdown.open').forEach(d => d.classList.remove('open'));
         if (!wasOpen) dropdown.classList.add('open');
-        return;
-    }
-    const li = e.target.closest('.group-dropdown li');
-    if (li) {
-        e.stopPropagation();
-        li.closest('.group-dropdown')?.classList.remove('open');
-        if (li.dataset.targetCmd) {
-            runCmd(li.dataset.targetCmd, li.dataset.targetValue || null);
-        } else if (li.dataset.targetId) {
-            document.getElementById(li.dataset.targetId)?.click();
-        }
-        editorEl.focus();
     }
 });
 
@@ -357,38 +447,6 @@ document.addEventListener('click', e => {
     if (!e.target.closest('#table-menu') && !e.target.closest('td')) {
         tableMenu.classList.add('hidden');
     }
-});
-
-/* =========================================================
-   EXEC CMD HELPER (with selection restore)
-   ========================================================= */
-function runCmd(cmd, value = null) {
-    restoreSelection();
-    try {
-        document.execCommand('styleWithCSS', false, true);
-    } catch (_) { }
-    document.execCommand(cmd, false, value);
-    saveSelection();
-}
-
-/* =========================================================
-   RIBBON: GENERIC execCommand BUTTONS (pointerdown for mobile)
-   ========================================================= */
-function attachPointerHandler(el, handler) {
-    el.addEventListener('pointerdown', e => {
-        // Prevent focus stealing on mobile
-        e.preventDefault();
-        e.stopPropagation();
-        handler(e);
-    });
-}
-
-// All buttons with data-cmd
-document.querySelectorAll('button[data-cmd]').forEach(btn => {
-    attachPointerHandler(btn, () => {
-        runCmd(btn.dataset.cmd, btn.dataset.value || null);
-        updateToolbarState();
-    });
 });
 
 /* =========================================================
@@ -524,6 +582,7 @@ async function openDoc(id) {
     titleInput.value = doc.title || 'Untitled';
     editorEl.innerHTML = doc.content || '';
     saveStatus.textContent = '';
+    savedRange = null;
     listView.classList.add('hidden');
     editorView.classList.remove('hidden');
     editorEl.focus();
@@ -583,11 +642,6 @@ const PARA_STYLE_MAP = {
     BLOCKQUOTE: 'Quote', PRE: 'Code'
 };
 
-function parseStyleString(s) {
-    const fake = document.createElement('span');
-    fake.setAttribute('style', s || '');
-    return fake.style;
-}
 function rgbToHex(rgb) {
     if (!rgb) return null;
     if (rgb.startsWith('#')) return rgb.slice(1).toUpperCase().padStart(6, '0');
@@ -1220,7 +1274,28 @@ bindFontControls('font-family', 'font-size');
 bindFontControls('font-family-compact', 'font-size-compact');
 
 // Font size +/- buttons
+document.getElementById('font-size-up')?.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const sel = document.getElementById('font-size');
+    const idx = sel.selectedIndex;
+    if (idx < sel.options.length - 1) {
+        sel.selectedIndex = idx + 1;
+        applyFontSize(parseInt(sel.value, 10));
+        scheduleSave();
+    }
+}, { passive: false });
+document.getElementById('font-size-down')?.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const sel = document.getElementById('font-size');
+    const idx = sel.selectedIndex;
+    if (idx > 0) {
+        sel.selectedIndex = idx - 1;
+        applyFontSize(parseInt(sel.value, 10));
+        scheduleSave();
+    }
+}, { passive: false });
 document.getElementById('font-size-up')?.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') return;
     e.preventDefault();
     const sel = document.getElementById('font-size');
     const idx = sel.selectedIndex;
@@ -1231,6 +1306,7 @@ document.getElementById('font-size-up')?.addEventListener('pointerdown', e => {
     }
 });
 document.getElementById('font-size-down')?.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') return;
     e.preventDefault();
     const sel = document.getElementById('font-size');
     const idx = sel.selectedIndex;
@@ -1244,8 +1320,17 @@ document.getElementById('font-size-down')?.addEventListener('pointerdown', e => 
 /* =========================================================
    TEXT CASE
    ========================================================= */
-document.getElementById('text-case-btn')?.addEventListener('pointerdown', async e => {
+document.getElementById('text-case-btn')?.addEventListener('touchstart', e => {
     e.preventDefault();
+    openTextCasePrompt();
+}, { passive: false });
+document.getElementById('text-case-btn')?.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') return;
+    e.preventDefault();
+    openTextCasePrompt();
+});
+
+async function openTextCasePrompt() {
     const sel = window.getSelection();
     if (!sel.rangeCount || sel.isCollapsed) {
         showToast('Select some text first.', 2000);
@@ -1263,17 +1348,13 @@ document.getElementById('text-case-btn')?.addEventListener('pointerdown', async 
     switch (choice.toLowerCase()) {
         case 'upper': next = current.toUpperCase(); break;
         case 'lower': next = current.toLowerCase(); break;
-        case 'title':
-            next = current.replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase());
-            break;
-        case 'sentence':
-            next = current.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase());
-            break;
+        case 'title': next = current.replace(/\w\S*/g, w => w[0].toUpperCase() + w.slice(1).toLowerCase()); break;
+        case 'sentence': next = current.toLowerCase().replace(/(^\s*\w|[.!?]\s*\w)/g, c => c.toUpperCase()); break;
         default: return;
     }
     runCmd('insertText', next);
     scheduleSave();
-});
+}
 
 /* =========================================================
    COLOR PICKERS
@@ -1291,8 +1372,13 @@ function buildColorGrids() {
             b.type = 'button';
             b.style.background = color;
             b.title = color;
-            b.addEventListener('pointerdown', e => {
+            b.addEventListener('touchstart', e => {
                 e.preventDefault();
+                e.stopPropagation();
+                applyColor(kind === 'text' ? 'foreColor' : 'hiliteColor', color);
+                closeAllColorMenus();
+            }, { passive: false });
+            b.addEventListener('click', e => {
                 e.stopPropagation();
                 applyColor(kind === 'text' ? 'foreColor' : 'hiliteColor', color);
                 closeAllColorMenus();
@@ -1329,30 +1415,38 @@ function initColorPickers() {
         const menu = picker.querySelector('.color-menu');
         const native = picker.querySelector('input[type="color"]');
         const customBtn = picker.querySelector('.color-custom');
-        mainBtn?.addEventListener('pointerdown', e => {
-            e.preventDefault();
+
+        attachPointerHandler(mainBtn, () => {
             const current = picker.querySelector('.color-letter').style.borderBottomColor || '#1f2328';
             applyColor(command, current);
         });
-        caret?.addEventListener('pointerdown', e => {
-            e.preventDefault();
+        attachPointerHandler(caret, () => {
             const wasHidden = menu.classList.contains('hidden');
             closeAllColorMenus();
             if (wasHidden) menu.classList.remove('hidden');
         });
-        customBtn?.addEventListener('pointerdown', e => { e.preventDefault(); native.click(); });
+        customBtn?.addEventListener('touchstart', e => {
+            e.preventDefault();
+            native.click();
+        }, { passive: false });
+        customBtn?.addEventListener('click', () => native.click());
         native?.addEventListener('input', e => { applyColor(command, e.target.value); closeAllColorMenus(); });
-        menu?.addEventListener('pointerdown', e => e.stopPropagation());
+        menu?.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+        menu?.addEventListener('click', e => e.stopPropagation());
     });
-    document.addEventListener('pointerdown', () => closeAllColorMenus());
+    document.addEventListener('click', () => closeAllColorMenus());
 }
 initColorPickers();
 
 /* =========================================================
    CLEAR / LINE HEIGHT
    ========================================================= */
-document.getElementById('clear-format')?.addEventListener('pointerdown', e => {
+document.getElementById('clear-format')?.addEventListener('touchstart', e => {
     e.preventDefault();
+    runCmd('removeFormat');
+    scheduleSave();
+}, { passive: false });
+document.getElementById('clear-format')?.addEventListener('click', () => {
     runCmd('removeFormat');
     scheduleSave();
 });
@@ -1378,8 +1472,20 @@ function getSelectedBlocks() {
 /* =========================================================
    INSERT HELPERS
    ========================================================= */
-document.getElementById('insert-link')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+function bindAction(el, handler) {
+    if (!el) return;
+    el.addEventListener('touchstart', e => {
+        e.preventDefault();
+        handler();
+    }, { passive: false });
+    el.addEventListener('pointerdown', e => {
+        if (e.pointerType === 'touch') return;
+        e.preventDefault();
+        handler();
+    });
+}
+
+bindAction(document.getElementById('insert-link'), () => {
     linkUrlInput.value = 'https://';
     linkTextInput.value = window.getSelection().toString() || '';
     linkModal.classList.remove('hidden');
@@ -1403,55 +1509,42 @@ linkModalConfirm?.addEventListener('click', () => {
     scheduleSave();
 });
 
-document.getElementById('insert-bookmark')?.addEventListener('pointerdown', async e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-bookmark'), async () => {
     const name = await promptModalOpen({
         title: 'Insert Bookmark',
         message: 'Bookmark name',
-        value: 'bookmark-' + Date.now().toString(36),
-        hint: 'A highlighted marker will be inserted.'
+        value: 'bookmark-' + Date.now().toString(36)
     });
     if (!name) return;
     runCmd('insertHTML', `<span class="bookmark" id="${escapeHTML(name)}">🔖 ${escapeHTML(name)}</span>&nbsp;`);
     scheduleSave();
 });
 
-document.getElementById('insert-date')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-date'), () => {
     runCmd('insertText', new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }));
     scheduleSave();
 });
-document.getElementById('insert-datetime')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-datetime'), () => {
     runCmd('insertText', new Date().toLocaleString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }));
     scheduleSave();
 });
-
-document.getElementById('insert-hr')?.addEventListener('pointerdown', e => {
-    e.preventDefault(); runCmd('insertHorizontalRule'); scheduleSave();
+bindAction(document.getElementById('insert-hr'), () => {
+    runCmd('insertHorizontalRule');
+    scheduleSave();
 });
-
-// Task list
-document.getElementById('insert-tasklist')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-tasklist'), () => {
     const html = `<div class="task-item"><input type="checkbox">&nbsp;<span>Task 1</span></div>
 <div class="task-item"><input type="checkbox">&nbsp;<span>Task 2</span></div><p><br></p>`;
     runCmd('insertHTML', html);
     scheduleSave();
 });
-
-// Quote with prompt
-document.getElementById('insert-quote')?.addEventListener('pointerdown', async e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-quote'), async () => {
     const text = await promptModalOpen({ title: 'Insert Quote', message: 'Quote text', value: '' });
     if (!text) return;
     runCmd('insertHTML', `<blockquote>${escapeHTML(text)}</blockquote><p><br></p>`);
     scheduleSave();
 });
-
-// Code block with language
-document.getElementById('insert-code')?.addEventListener('pointerdown', async e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-code'), async () => {
     const lang = await promptModalOpen({ title: 'Code block', message: 'Language (optional)', value: '' });
     const code = await promptModalOpen({ title: 'Code block', message: 'Code', value: '' });
     if (code === null) return;
@@ -1459,10 +1552,7 @@ document.getElementById('insert-code')?.addEventListener('pointerdown', async e 
     runCmd('insertHTML', `<pre${langAttr}>${escapeHTML(code)}</pre><p><br></p>`);
     scheduleSave();
 });
-
-// Table of contents
-document.getElementById('insert-toc')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-toc'), () => {
     const headings = editorEl.querySelectorAll('h1, h2, h3');
     if (!headings.length) { showToast('No headings found in this document.', 2500); return; }
     let html = '<div class="toc"><div class="toc-title">Table of Contents</div><ul>';
@@ -1476,28 +1566,18 @@ document.getElementById('insert-toc')?.addEventListener('pointerdown', e => {
     runCmd('insertHTML', html);
     scheduleSave();
 });
-
-// Footnote
-document.getElementById('insert-footnote')?.addEventListener('pointerdown', async e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-footnote'), async () => {
     const text = await promptModalOpen({ title: 'Footnote', message: 'Footnote text', value: '' });
     if (!text) return;
     const num = (editorEl.querySelectorAll('.footnote').length || 0) + 1;
-    runCmd('insertHTML',
-        `<span class="footnote" title="${escapeHTML(text)}" data-note="${escapeHTML(text)}">[${num}]</span>&nbsp;`);
+    runCmd('insertHTML', `<span class="footnote" title="${escapeHTML(text)}" data-note="${escapeHTML(text)}">[${num}]</span>&nbsp;`);
     scheduleSave();
 });
-
-// Page number placeholder
-document.getElementById('insert-pagenum')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-pagenum'), () => {
     runCmd('insertHTML', `<span class="page-number">Page&nbsp;<span class="page-num">1</span></span>&nbsp;`);
     scheduleSave();
 });
-
-// Table insert via modal
-document.getElementById('insert-table')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-table'), () => {
     tableModal.classList.remove('hidden');
     setTimeout(() => tableRowsInput.focus(), 40);
 });
@@ -1519,7 +1599,6 @@ tableModalConfirm?.addEventListener('click', () => {
     scheduleSave();
 });
 
-// Image with compression
 const IMAGE_MAX_WIDTH = 1600;
 const IMAGE_QUALITY = 0.82;
 function compressImage(file) {
@@ -1557,8 +1636,7 @@ function blobToDataURL(blob) {
         r.readAsDataURL(blob);
     });
 }
-document.getElementById('insert-image')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-image'), () => {
     const input = document.createElement('input');
     input.type = 'file'; input.accept = 'image/*';
     input.onchange = async () => {
@@ -1578,9 +1656,7 @@ document.getElementById('insert-image')?.addEventListener('pointerdown', e => {
     };
     input.click();
 });
-
-document.getElementById('insert-shape')?.addEventListener('pointerdown', async e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-shape'), async () => {
     const shape = await promptModalOpen({ title: 'Insert Shape', message: 'Type: rect, circle, or triangle', value: 'rect' });
     if (!shape) return;
     const svg = shape === 'circle'
@@ -1591,30 +1667,25 @@ document.getElementById('insert-shape')?.addEventListener('pointerdown', async e
     runCmd('insertHTML', svg);
     scheduleSave();
 });
-
-document.getElementById('insert-emoji')?.addEventListener('pointerdown', async e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-emoji'), async () => {
     const emoji = await promptModalOpen({ title: 'Insert Emoji', message: 'Type or paste an emoji', value: '😀' });
     if (!emoji) return;
     runCmd('insertText', emoji);
     scheduleSave();
 });
-document.getElementById('insert-symbol')?.addEventListener('pointerdown', async e => {
-    e.preventDefault();
-    const sym = await promptModalOpen({ title: 'Insert Symbol', message: 'Type or paste a symbol (©, →, √, π)', value: '©' });
+bindAction(document.getElementById('insert-symbol'), async () => {
+    const sym = await promptModalOpen({ title: 'Insert Symbol', message: 'Type or paste a symbol', value: '©' });
     if (!sym) return;
     runCmd('insertText', sym);
     scheduleSave();
 });
-
-document.getElementById('insert-pagebreak')?.addEventListener('pointerdown', e => {
-    e.preventDefault();
+bindAction(document.getElementById('insert-pagebreak'), () => {
     runCmd('insertHTML', '<hr class="page-break"><p><br></p>');
     scheduleSave();
 });
 
 /* =========================================================
-   TABLE ACTIONS (ribbon + context menu + long-press)
+   TABLE ACTIONS
    ========================================================= */
 function runTableAction(action, cell) {
     if (!cell) return;
@@ -1672,17 +1743,17 @@ function runTableAction(action, cell) {
     }
     scheduleSave();
 }
-
-// Ribbon table buttons
 document.querySelectorAll('[data-table-action]').forEach(btn => {
-    btn.addEventListener('pointerdown', e => {
+    btn.addEventListener('touchstart', e => {
         e.preventDefault();
         const cell = tableMenuTargetCell || getCurrentTableCell();
-        if (!cell) return;
-        runTableAction(btn.dataset.tableAction, cell);
+        if (cell) runTableAction(btn.dataset.tableAction, cell);
+    }, { passive: false });
+    btn.addEventListener('click', () => {
+        const cell = tableMenuTargetCell || getCurrentTableCell();
+        if (cell) runTableAction(btn.dataset.tableAction, cell);
     });
 });
-
 function getCurrentTableCell() {
     const sel = window.getSelection();
     if (!sel.rangeCount) return null;
@@ -1693,23 +1764,18 @@ function getCurrentTableCell() {
     }
     return null;
 }
-
-// Right-click / long-press on table
 function showTableMenu(clientX, clientY, cell) {
     tableMenuTargetCell = cell;
     tableMenu.classList.remove('hidden');
     tableMenu.style.left = Math.min(clientX, window.innerWidth - 240) + 'px';
     tableMenu.style.top = Math.min(clientY, window.innerHeight - 300) + 'px';
 }
-
 editorEl.addEventListener('contextmenu', e => {
     const cell = e.target.closest('td');
     if (!cell) return;
     e.preventDefault();
     showTableMenu(e.clientX, e.clientY, cell);
 });
-
-// Long press for touch
 let longPressTimer = null;
 editorEl.addEventListener('touchstart', e => {
     const cell = e.target.closest('td');
@@ -1727,7 +1793,6 @@ editorEl.addEventListener('touchend', () => {
 editorEl.addEventListener('touchmove', () => {
     if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
 });
-
 tableMenu.addEventListener('click', e => {
     const btn = e.target.closest('button[data-table-action]');
     if (!btn || !tableMenuTargetCell) return;
@@ -1735,8 +1800,6 @@ tableMenu.addEventListener('click', e => {
     tableMenu.classList.add('hidden');
     editorEl.focus();
 });
-
-// Cell color pickers
 document.getElementById('cell-bg-color')?.addEventListener('input', e => {
     const cell = tableMenuTargetCell || getCurrentTableCell();
     if (cell) { cell.style.backgroundColor = e.target.value; scheduleSave(); }
@@ -1760,15 +1823,12 @@ function openFind(replaceMode = false) {
     findInput.focus();
     findInput.select();
 }
-
-document.getElementById('find-btn')?.addEventListener('pointerdown', e => { e.preventDefault(); openFind(false); });
-document.getElementById('replace-btn')?.addEventListener('pointerdown', e => { e.preventDefault(); openFind(true); });
-
+bindAction(document.getElementById('find-btn'), () => openFind(false));
+bindAction(document.getElementById('replace-btn'), () => openFind(true));
 document.getElementById('find-close')?.addEventListener('click', () => {
     findBar.classList.add('hidden');
     window.getSelection().removeAllRanges();
 });
-
 findInput?.addEventListener('input', performFind);
 document.getElementById('find-next')?.addEventListener('click', () => moveFind(1));
 document.getElementById('find-prev')?.addEventListener('click', () => moveFind(-1));
@@ -1795,13 +1855,11 @@ function performFind() {
         highlightMatch();
     }
 }
-
 function moveFind(dir) {
     if (!findMatches.length) return;
     currentFindIndex = (currentFindIndex + dir + findMatches.length) % findMatches.length;
     highlightMatch();
 }
-
 function highlightMatch() {
     const m = findMatches[currentFindIndex];
     if (!m) return;
@@ -1814,7 +1872,6 @@ function highlightMatch() {
     m.node.parentElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
     findCount.textContent = `${currentFindIndex + 1} of ${findMatches.length}`;
 }
-
 document.getElementById('replace-one')?.addEventListener('click', () => {
     const m = findMatches[currentFindIndex];
     if (!m) return;
@@ -1827,7 +1884,6 @@ document.getElementById('replace-one')?.addEventListener('click', () => {
     scheduleSave();
     performFind();
 });
-
 document.getElementById('replace-all')?.addEventListener('click', () => {
     const q = findInput.value;
     const replaceWith = replaceInput.value;
@@ -1919,8 +1975,7 @@ document.getElementById('thesaurus-btn')?.addEventListener('click', () => {
     if (!word) { showToast('Select a word first.', 2500); return; }
     window.open('https://www.thesaurus.com/browse/' + encodeURIComponent(word), '_blank');
 });
-document.getElementById('comment-btn')?.addEventListener('pointerdown', async e => {
-    e.preventDefault();
+bindAction(document.getElementById('comment-btn'), async () => {
     const text = await promptModalOpen({ title: 'Add Comment', message: 'Comment text', value: '' });
     if (!text) return;
     runCmd('insertHTML', ` <span class="doc-comment" title="${escapeHTML(text)}" style="background:#fff8b8;border-bottom:2px solid #f0c000;">[💬]</span> `);
@@ -1951,54 +2006,64 @@ document.getElementById('compact-toggle')?.addEventListener('click', () => {
 /* =========================================================
    MOBILE BOTTOM BAR
    ========================================================= */
-mobileBar?.addEventListener('pointerdown', e => {
+mobileBar?.addEventListener('touchstart', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
     e.preventDefault();
-    const cmd = btn.dataset.mb;
+    handleMobileBar(btn.dataset.mb);
+}, { passive: false });
+mobileBar?.addEventListener('click', e => {
+    const btn = e.target.closest('.mb-btn');
+    if (!btn) return;
+    handleMobileBar(btn.dataset.mb);
+});
+
+function handleMobileBar(cmd) {
     switch (cmd) {
         case 'undo': runCmd('undo'); break;
         case 'redo': runCmd('redo'); break;
         case 'bold': runCmd('bold'); break;
         case 'italic': runCmd('italic'); break;
         case 'underline': runCmd('underline'); break;
-        case 'heading':
-            runCmd('formatBlock', 'H2');
-            break;
-        case 'bullet':
-            runCmd('insertUnorderedList');
-            break;
-        case 'more':
-            mobileSheet.classList.remove('hidden');
-            return;
+        case 'heading': runCmd('formatBlock', 'H2'); break;
+        case 'bullet': runCmd('insertUnorderedList'); break;
+        case 'more': mobileSheet.classList.remove('hidden'); return;
     }
     updateToolbarState();
-});
+}
 
 mobileSheetClose?.addEventListener('click', () => mobileSheet.classList.add('hidden'));
 
-mobileSheet?.addEventListener('pointerdown', e => {
+mobileSheet?.addEventListener('touchstart', e => {
     const btn = e.target.closest('.sheet-btn');
     if (!btn) return;
     e.preventDefault();
-    const action = btn.dataset.sheet;
+    handleSheetAction(btn.dataset.sheet);
+}, { passive: false });
+mobileSheet?.addEventListener('click', e => {
+    const btn = e.target.closest('.sheet-btn');
+    if (!btn) return;
+    handleSheetAction(btn.dataset.sheet);
+});
+
+function handleSheetAction(action) {
     mobileSheet.classList.add('hidden');
     switch (action) {
         case 'strikeThrough': runCmd('strikeThrough'); break;
         case 'superscript': runCmd('superscript'); break;
         case 'subscript': runCmd('subscript'); break;
         case 'ordered': runCmd('insertOrderedList'); break;
-        case 'tasklist': document.getElementById('insert-tasklist')?.dispatchEvent(new PointerEvent('pointerdown')); break;
-        case 'quote': document.getElementById('insert-quote')?.dispatchEvent(new PointerEvent('pointerdown')); break;
-        case 'code': document.getElementById('insert-code')?.dispatchEvent(new PointerEvent('pointerdown')); break;
-        case 'link': document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown')); break;
-        case 'image': document.getElementById('insert-image')?.dispatchEvent(new PointerEvent('pointerdown')); break;
-        case 'table': document.getElementById('insert-table')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'tasklist': document.getElementById('insert-tasklist')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
+        case 'quote': document.getElementById('insert-quote')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
+        case 'code': document.getElementById('insert-code')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
+        case 'link': document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
+        case 'image': document.getElementById('insert-image')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
+        case 'table': document.getElementById('insert-table')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
         case 'hr': runCmd('insertHorizontalRule'); break;
-        case 'date': document.getElementById('insert-date')?.dispatchEvent(new PointerEvent('pointerdown')); break;
-        case 'toc': document.getElementById('insert-toc')?.dispatchEvent(new PointerEvent('pointerdown')); break;
-        case 'footnote': document.getElementById('insert-footnote')?.dispatchEvent(new PointerEvent('pointerdown')); break;
-        case 'bookmark': document.getElementById('insert-bookmark')?.dispatchEvent(new PointerEvent('pointerdown')); break;
+        case 'date': document.getElementById('insert-date')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
+        case 'toc': document.getElementById('insert-toc')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
+        case 'footnote': document.getElementById('insert-footnote')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
+        case 'bookmark': document.getElementById('insert-bookmark')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); break;
         case 'clear': runCmd('removeFormat'); break;
         case 'find': openFind(false); break;
         case 'save': saveNow(); break;
@@ -2006,7 +2071,7 @@ mobileSheet?.addEventListener('pointerdown', e => {
         case 'back': saveNow().then(showList); break;
     }
     updateToolbarState();
-});
+}
 
 /* =========================================================
    FILE MENU
@@ -2046,18 +2111,18 @@ const COMMANDS = [
     { name: 'Align Left', icon: '⬅', run: () => runCmd('justifyLeft') },
     { name: 'Align Center', icon: '↔', run: () => runCmd('justifyCenter') },
     { name: 'Align Right', icon: '➡', run: () => runCmd('justifyRight') },
-    { name: 'Insert Link', icon: '🔗', run: () => document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Image', icon: '🖼', run: () => document.getElementById('insert-image')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Table', icon: '▦', run: () => document.getElementById('insert-table')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Link', icon: '🔗', run: () => document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Image', icon: '🖼', run: () => document.getElementById('insert-image')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Table', icon: '▦', run: () => document.getElementById('insert-table')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
     { name: 'Insert Horizontal Rule', icon: '―', run: () => runCmd('insertHorizontalRule') },
-    { name: 'Insert Page Break', icon: '⎯', run: () => document.getElementById('insert-pagebreak')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Date', icon: '📅', run: () => document.getElementById('insert-date')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Date & Time', icon: '🕐', run: () => document.getElementById('insert-datetime')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Emoji', icon: '😀', run: () => document.getElementById('insert-emoji')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Bookmark', icon: '🔖', run: () => document.getElementById('insert-bookmark')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Table of Contents', icon: '☰', run: () => document.getElementById('insert-toc')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Footnote', icon: '⁽¹⁾', run: () => document.getElementById('insert-footnote')?.dispatchEvent(new PointerEvent('pointerdown')) },
-    { name: 'Insert Checklist', icon: '☑', run: () => document.getElementById('insert-tasklist')?.dispatchEvent(new PointerEvent('pointerdown')) },
+    { name: 'Insert Page Break', icon: '⎯', run: () => document.getElementById('insert-pagebreak')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Date', icon: '📅', run: () => document.getElementById('insert-date')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Date & Time', icon: '🕐', run: () => document.getElementById('insert-datetime')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Emoji', icon: '😀', run: () => document.getElementById('insert-emoji')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Bookmark', icon: '🔖', run: () => document.getElementById('insert-bookmark')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Table of Contents', icon: '☰', run: () => document.getElementById('insert-toc')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Footnote', icon: '⁽¹⁾', run: () => document.getElementById('insert-footnote')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Checklist', icon: '☑', run: () => document.getElementById('insert-tasklist')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
     { name: 'Find in document', icon: '🔍', run: () => openFind(false) },
     { name: 'Find & Replace', icon: '⇄', run: () => openFind(true) },
     { name: 'Word Count', icon: '#', run: showWordCount },
@@ -2146,7 +2211,7 @@ paletteOverlay.addEventListener('click', e => {
 });
 
 /* =========================================================
-   GLOBAL KEYBOARD SHORTCUTS (capture phase)
+   GLOBAL KEYBOARD SHORTCUTS
    ========================================================= */
 document.addEventListener('keydown', e => {
     const target = e.target;
@@ -2175,7 +2240,7 @@ document.addEventListener('keydown', e => {
         case 'b': e.preventDefault(); e.stopPropagation(); runCmd('bold'); updateToolbarState(); return;
         case 'i': e.preventDefault(); e.stopPropagation(); runCmd('italic'); updateToolbarState(); return;
         case 'u': e.preventDefault(); e.stopPropagation(); runCmd('underline'); updateToolbarState(); return;
-        case 'k': e.preventDefault(); e.stopPropagation(); document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown')); return;
+        case 'k': e.preventDefault(); e.stopPropagation(); document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); return;
         case 'p': e.preventDefault(); e.stopPropagation(); printDoc(); return;
         case 'f':
             e.preventDefault(); e.stopPropagation();
@@ -2210,7 +2275,7 @@ editorEl.addEventListener('paste', e => {
 });
 
 /* =========================================================
-   VISUAL VIEWPORT — keep editor visible when keyboard opens
+   VISUAL VIEWPORT
    ========================================================= */
 if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => {

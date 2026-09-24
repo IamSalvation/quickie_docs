@@ -85,6 +85,34 @@ textarea {
     font-size: 16px;
 }
 
+/* ============ iOS SAFARI FIX — TOOLBAR CONTROLS ============
+   Prevent iOS from stealing selection when tapping any toolbar control.
+   `-webkit-user-select: none` + `-webkit-touch-callout: none`
+   keeps the text selection alive in the editor. */
+.ribbon button,
+.ribbon select,
+.ribbon label,
+.ribbon li,
+.mobile-bar button,
+.mobile-sheet button,
+.file-pill,
+.group-collapsed-btn,
+.group-dropdown li,
+.color-main,
+.color-caret,
+.color-grid button,
+.color-custom,
+.toolbar button,
+.context-menu button,
+.modal button,
+.editor-header button,
+.ribbon-search {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: manipulation;
+}
+
 /* ============ LIST VIEW ============ */
 .list-header {
     display: flex;
@@ -373,7 +401,6 @@ textarea {
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s, transform 0.1s;
     white-space: nowrap;
-    touch-action: manipulation;
 }
 
 .file-pill:hover {
@@ -449,7 +476,6 @@ textarea {
     min-width: 46px;
     transition: background 0.1s, border-color 0.1s;
     line-height: 1.1;
-    touch-action: manipulation;
 }
 
 .ribbon-btn .icon {
@@ -487,7 +513,6 @@ textarea {
     outline: none;
     height: 24px;
     max-width: 150px;
-    touch-action: manipulation;
 }
 
 .ribbon-select.small {
@@ -529,7 +554,6 @@ textarea {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    touch-action: manipulation;
 }
 
 .color-picker .color-main:hover {
@@ -558,7 +582,6 @@ textarea {
     font-size: 9px;
     color: var(--muted);
     line-height: 1;
-    touch-action: manipulation;
 }
 
 .color-picker .color-caret:hover {
@@ -599,7 +622,6 @@ textarea {
     cursor: pointer;
     padding: 0;
     transition: transform 0.1s, box-shadow 0.15s;
-    touch-action: manipulation;
 }
 
 .color-grid button:hover {
@@ -618,7 +640,6 @@ textarea {
     color: var(--text);
     font-family: inherit;
     text-align: center;
-    touch-action: manipulation;
 }
 
 .color-custom:hover {
@@ -654,7 +675,6 @@ textarea {
     height: 60px;
     line-height: 1.1;
     position: relative;
-    touch-action: manipulation;
 }
 
 .group.collapsed>.group-collapsed-btn:hover {
@@ -701,7 +721,7 @@ textarea {
 }
 
 .group-dropdown li {
-    padding: 8px 12px;
+    padding: 10px 12px;
     border-radius: 4px;
     font-size: 13px;
     cursor: pointer;
@@ -710,7 +730,6 @@ textarea {
     display: flex;
     align-items: center;
     gap: 8px;
-    touch-action: manipulation;
 }
 
 .group-dropdown li:hover {
@@ -743,7 +762,6 @@ textarea {
     color: var(--text);
     min-width: 34px;
     text-align: center;
-    touch-action: manipulation;
 }
 
 .toolbar button:hover {
@@ -791,6 +809,7 @@ textarea {
     padding: 6px 8px;
     border-radius: 6px;
     color: var(--text);
+    min-width: 0;
 }
 
 .doc-title:focus {
@@ -824,6 +843,8 @@ textarea {
     transition: background 0.2s, color 0.2s;
     word-wrap: break-word;
     overflow-wrap: break-word;
+    -webkit-user-select: text;
+    user-select: text;
 }
 
 .editor h1 {
@@ -946,7 +967,7 @@ textarea {
 
 .editor .toc ul {
     list-style: none;
-    margin: 0 0 0 0;
+    margin: 0;
     padding: 0;
 }
 
@@ -1247,7 +1268,6 @@ textarea {
     font-family: inherit;
     cursor: pointer;
     white-space: nowrap;
-    touch-action: manipulation;
 }
 
 .context-menu button:hover {
@@ -1402,7 +1422,6 @@ textarea {
     color: var(--text);
     cursor: pointer;
     border-radius: 8px;
-    touch-action: manipulation;
     transition: background 0.1s;
     min-height: 44px;
 }
@@ -1495,7 +1514,6 @@ textarea {
     font-family: inherit;
     font-size: 15px;
     cursor: pointer;
-    touch-action: manipulation;
 }
 
 .sheet-btn:hover,
@@ -1511,8 +1529,6 @@ textarea {
 }
 
 @media (max-width: 768px) {
-
-    /* Hide ribbon and compact toolbar on mobile, show mobile bar */
     .ribbon {
         display: none;
     }
@@ -1525,13 +1541,11 @@ textarea {
         display: flex;
     }
 
-    /* Editor gets bottom padding so content isn't hidden behind the mobile bar */
     .editor {
         padding: 16px 16px calc(70px + env(safe-area-inset-bottom, 0px)) 16px;
         font-size: 16px;
     }
 
-    /* Editor header compresses */
     .editor-header {
         padding: 8px 12px;
         gap: 8px;
@@ -1555,7 +1569,6 @@ textarea {
         font-size: 12.5px;
     }
 
-    /* Find bar on mobile */
     .find-bar {
         padding: 8px 12px;
     }
@@ -1564,13 +1577,11 @@ textarea {
         font-size: 16px;
     }
 
-    /* Modals full-screen-ish on mobile */
     .modal {
         width: 100%;
         max-height: 85vh;
     }
 
-    /* Word count repositioned above mobile bar */
     .wordcount-popup {
         bottom: calc(80px + env(safe-area-inset-bottom, 0px));
         right: 12px;
@@ -1578,17 +1589,14 @@ textarea {
         max-width: none;
     }
 
-    /* Toast above mobile bar */
     .toast {
         bottom: calc(80px + env(safe-area-inset-bottom, 0px));
     }
 
-    /* Table context menu repositioned */
     .context-menu {
         min-width: 200px;
     }
 
-    /* List view adjustments */
     .list-header {
         padding: 14px 16px;
         flex-wrap: wrap;
@@ -1603,7 +1611,6 @@ textarea {
         padding: 12px;
     }
 
-    /* Larger touch targets on doc list */
     .delete-btn {
         padding: 8px 12px;
     }

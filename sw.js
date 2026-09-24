@@ -1,9 +1,9 @@
 /* =========================================================
    Quickie Docs — Service Worker
-   v1.4.0 — Mobile fixes + expanded toolbar
+   v1.4.1 — iOS selection fixes
    ========================================================= */
 
-const VERSION = 'v1.4.0';
+const VERSION = 'v1.4.1';
 const APP_CACHE = `quickie-docs-app-${VERSION}`;
 const CDN_CACHE = `quickie-docs-cdn-${VERSION}`;
 const RUNTIME_CACHE = `quickie-docs-runtime-${VERSION}`;
