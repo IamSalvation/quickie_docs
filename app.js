@@ -1,5 +1,5 @@
 /* =========================================================
-   Quickie Docs — v1.4.2
+   Quickie Docs — v1.4.3
    iOS selection fixes + tabbed mobile sheet + scroll-safe touch
    ========================================================= */
 
@@ -76,7 +76,6 @@ const mobileBar = document.getElementById('mobile-bar');
 const mobileSheet = document.getElementById('mobile-sheet');
 const mobileSheetClose = document.getElementById('mobile-sheet-close');
 
-// Save As modal
 const saveAsModal = document.getElementById('save-as-modal');
 const saveAsName = document.getElementById('save-as-name');
 const saveAsType = document.getElementById('save-as-type');
@@ -85,7 +84,6 @@ const saveAsClose = document.getElementById('save-as-close');
 const saveAsCancel = document.getElementById('save-as-cancel');
 const saveAsConfirm = document.getElementById('save-as-confirm');
 
-// Prompt modal
 const promptModal = document.getElementById('prompt-modal');
 const promptTitle = document.getElementById('prompt-title');
 const promptMessage = document.getElementById('prompt-message');
@@ -95,7 +93,6 @@ const promptClose = document.getElementById('prompt-close');
 const promptCancel = document.getElementById('prompt-cancel');
 const promptConfirm = document.getElementById('prompt-confirm');
 
-// Table modal
 const tableModal = document.getElementById('table-modal');
 const tableRowsInput = document.getElementById('table-rows');
 const tableColsInput = document.getElementById('table-cols');
@@ -103,7 +100,6 @@ const tableModalClose = document.getElementById('table-modal-close');
 const tableModalCancel = document.getElementById('table-modal-cancel');
 const tableModalConfirm = document.getElementById('table-modal-confirm');
 
-// Link modal
 const linkModal = document.getElementById('link-modal');
 const linkUrlInput = document.getElementById('link-url');
 const linkTextInput = document.getElementById('link-text');
@@ -304,7 +300,7 @@ document.querySelectorAll('.ribbon-tabs .tab').forEach(tab => {
 });
 
 /* =========================================================
-   TABLE TAB AUTO-SHOW (desktop + mobile sheet)
+   TABLE TAB AUTO-SHOW
    ========================================================= */
 const tableTabBtn = document.getElementById('table-tab-btn');
 const sheetTableTab = document.getElementById('sheet-table-tab');
@@ -343,6 +339,7 @@ function runCmd(cmd, value = null) {
    POINTER HANDLER (iOS-safe)
    ========================================================= */
 function attachPointerHandler(el, handler) {
+    if (!el) return;
     let handled = false;
     el.addEventListener('touchstart', e => {
         e.preventDefault();
@@ -1200,7 +1197,6 @@ function bindFontControls(familyId, sizeId) {
 bindFontControls('font-family', 'font-size');
 bindFontControls('font-family-compact', 'font-size-compact');
 
-// Font size +/-
 document.getElementById('font-size-up')?.addEventListener('touchstart', e => {
     e.preventDefault();
     const sel = document.getElementById('font-size');
@@ -1930,26 +1926,16 @@ function handleMobileBar(cmd) {
 }
 
 /* =========================================================
-   MOBILE SHEET — TABBED + SCROLL-SAFE
+   MOBILE SHEET — TABBED + SCROLL-SAFE (FIXED)
    ========================================================= */
 let sheetTouchStartX = 0;
 let sheetTouchStartY = 0;
 let sheetTouchMoved = false;
-
-mobileSheet?.querySelectorAll('.sheet-tab').forEach(tab => {
-    tab.addEventListener('touchstart', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        switchSheetTab(tab.dataset.sheetTab);
-    }, { passive: false });
-    tab.addEventListener('click', e => {
-        e.stopPropagation();
-        switchSheetTab(tab.dataset.sheetTab);
-    });
-});
+let sheetActiveTab = 'home';
 
 function switchSheetTab(name) {
     if (!name) return;
+    sheetActiveTab = name;
     mobileSheet.querySelectorAll('.sheet-tab').forEach(t =>
         t.classList.toggle('active', t.dataset.sheetTab === name)
     );
@@ -1959,10 +1945,24 @@ function switchSheetTab(name) {
     try { sessionStorage.setItem('quickie-sheet-tab', name); } catch (_) { }
 }
 
+mobileSheet?.querySelectorAll('.sheet-tab').forEach(tab => {
+    tab.addEventListener('touchstart', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        switchSheetTab(tab.dataset.sheetTab);
+        sheetTouchMoved = false;
+    }, { passive: false });
+    tab.addEventListener('click', e => {
+        e.stopPropagation();
+        switchSheetTab(tab.dataset.sheetTab);
+        sheetTouchMoved = false;
+    });
+});
+
 mobileSheet?.addEventListener('touchstart', e => {
     const btn = e.target.closest('.sheet-btn');
-    const tab = e.target.closest('.sheet-tab');
-    if (!btn && !tab) return;
+    const closeBtn = e.target.closest('.mobile-sheet-close');
+    if (!btn && !closeBtn) return;
     e.preventDefault();
     sheetTouchStartX = e.touches[0].clientX;
     sheetTouchStartY = e.touches[0].clientY;
@@ -1978,124 +1978,133 @@ mobileSheet?.addEventListener('touchmove', e => {
 
 mobileSheet?.addEventListener('touchend', e => {
     const btn = e.target.closest('.sheet-btn');
-    if (!btn) return;
-    if (sheetTouchMoved) return;
+    const closeBtn = e.target.closest('.mobile-sheet-close');
+    if (!btn && !closeBtn) return;
+    if (closeBtn) {
+        e.preventDefault();
+        mobileSheet.classList.add('hidden');
+        sheetTouchMoved = false;
+        return;
+    }
+    if (sheetTouchMoved) {
+        sheetTouchMoved = false;
+        return;
+    }
     e.preventDefault();
-    handleSheetAction(btn.dataset.sheet);
+    const action = btn.dataset.sheet;
+    sheetTouchMoved = false;
+    handleSheetAction(action);
 }, { passive: false });
 
 mobileSheet?.addEventListener('click', e => {
     const btn = e.target.closest('.sheet-btn');
+    const closeBtn = e.target.closest('.mobile-sheet-close');
+    if (closeBtn) {
+        mobileSheet.classList.add('hidden');
+        return;
+    }
     if (!btn) return;
     if (sheetTouchMoved) return;
     handleSheetAction(btn.dataset.sheet);
+    sheetTouchMoved = false;
 });
 
 function handleSheetAction(action) {
     if (!action) return;
     mobileSheet.classList.add('hidden');
-    const dispatch = id => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-        el.dispatchEvent(new Event('click', { bubbles: true }));
-    };
-    switch (action) {
-        // History
-        case 'undo': runCmd('undo'); break;
-        case 'redo': runCmd('redo'); break;
-        // Font
-        case 'bold': runCmd('bold'); break;
-        case 'italic': runCmd('italic'); break;
-        case 'underline': runCmd('underline'); break;
-        case 'strikeThrough': runCmd('strikeThrough'); break;
-        case 'superscript': runCmd('superscript'); break;
-        case 'subscript': runCmd('subscript'); break;
-        case 'textCase': openTextCasePrompt(); break;
-        case 'textColor': {
-            const native = document.querySelector('.color-picker[data-color-target="foreColor"] input[type="color"]');
-            if (native) native.click();
-            break;
+    setTimeout(() => {
+        const dispatch = id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        };
+        switch (action) {
+            case 'undo': runCmd('undo'); break;
+            case 'redo': runCmd('redo'); break;
+            case 'bold': runCmd('bold'); break;
+            case 'italic': runCmd('italic'); break;
+            case 'underline': runCmd('underline'); break;
+            case 'strikeThrough': runCmd('strikeThrough'); break;
+            case 'superscript': runCmd('superscript'); break;
+            case 'subscript': runCmd('subscript'); break;
+            case 'textCase': openTextCasePrompt(); break;
+            case 'textColor': {
+                const native = document.querySelector('.color-picker[data-color-target="foreColor"] input[type="color"]');
+                if (native) native.click();
+                break;
+            }
+            case 'highlight': {
+                const native = document.querySelector('.color-picker[data-color-target="hiliteColor"] input[type="color"]');
+                if (native) native.click();
+                break;
+            }
+            case 'clearFormat': runCmd('removeFormat'); break;
+            case 'bullet': runCmd('insertUnorderedList'); break;
+            case 'ordered': runCmd('insertOrderedList'); break;
+            case 'tasklist': dispatch('insert-tasklist'); break;
+            case 'outdent': runCmd('outdent'); break;
+            case 'indent': runCmd('indent'); break;
+            case 'alignLeft': runCmd('justifyLeft'); break;
+            case 'alignCenter': runCmd('justifyCenter'); break;
+            case 'alignRight': runCmd('justifyRight'); break;
+            case 'alignJustify': runCmd('justifyFull'); break;
+            case 'h1': runCmd('formatBlock', 'H1'); break;
+            case 'h2': runCmd('formatBlock', 'H2'); break;
+            case 'h3': runCmd('formatBlock', 'H3'); break;
+            case 'normal': runCmd('formatBlock', 'P'); break;
+            case 'quoteStyle': runCmd('formatBlock', 'BLOCKQUOTE'); break;
+            case 'codeStyle': runCmd('formatBlock', 'PRE'); break;
+            case 'find': openFind(false); break;
+            case 'replace': openFind(true); break;
+            case 'wordcount': showWordCount(); break;
+            case 'pagebreak': dispatch('insert-pagebreak'); break;
+            case 'pagenum': dispatch('insert-pagenum'); break;
+            case 'table': dispatch('insert-table'); break;
+            case 'image': dispatch('insert-image'); break;
+            case 'shape': dispatch('insert-shape'); break;
+            case 'link': dispatch('insert-link'); break;
+            case 'bookmark': dispatch('insert-bookmark'); break;
+            case 'emoji': dispatch('insert-emoji'); break;
+            case 'symbol': dispatch('insert-symbol'); break;
+            case 'date': dispatch('insert-date'); break;
+            case 'datetime': dispatch('insert-datetime'); break;
+            case 'hr': dispatch('insert-hr'); break;
+            case 'toc': dispatch('insert-toc'); break;
+            case 'footnote': dispatch('insert-footnote'); break;
+            case 'quoteInsert': dispatch('insert-quote'); break;
+            case 'codeInsert': dispatch('insert-code'); break;
+            case 'rowAbove':
+            case 'rowBelow':
+            case 'rowDelete':
+            case 'colLeft':
+            case 'colRight':
+            case 'colDelete':
+            case 'merge':
+            case 'tableDelete': {
+                const cell = tableMenuTargetCell || getCurrentTableCell();
+                const map = {
+                    rowAbove: 'row-above', rowBelow: 'row-below', rowDelete: 'row-delete',
+                    colLeft: 'col-left', colRight: 'col-right', colDelete: 'col-delete',
+                    merge: 'merge', tableDelete: 'table-delete'
+                };
+                if (cell) runTableAction(map[action], cell);
+                break;
+            }
+            case 'spellcheck': dispatch('spellcheck-btn'); break;
+            case 'thesaurus': dispatch('thesaurus-btn'); break;
+            case 'readingtime': showReadingTime(); break;
+            case 'charfreq': showCharFreq(); break;
+            case 'comment': dispatch('comment-btn'); break;
+            case 'theme': toggleTheme(); break;
+            case 'preview': dispatch('preview-btn'); break;
+            case 'fullscreen': dispatch('fullscreen-btn'); break;
+            case 'print': printDoc(); break;
+            case 'save': saveNow(); break;
+            case 'saveas': openSaveAsModal(); break;
+            case 'back': saveNow().then(showList); break;
         }
-        case 'highlight': {
-            const native = document.querySelector('.color-picker[data-color-target="hiliteColor"] input[type="color"]');
-            if (native) native.click();
-            break;
-        }
-        case 'clearFormat': runCmd('removeFormat'); break;
-        // Paragraph
-        case 'bullet': runCmd('insertUnorderedList'); break;
-        case 'ordered': runCmd('insertOrderedList'); break;
-        case 'tasklist': dispatch('insert-tasklist'); break;
-        case 'outdent': runCmd('outdent'); break;
-        case 'indent': runCmd('indent'); break;
-        case 'alignLeft': runCmd('justifyLeft'); break;
-        case 'alignCenter': runCmd('justifyCenter'); break;
-        case 'alignRight': runCmd('justifyRight'); break;
-        case 'alignJustify': runCmd('justifyFull'); break;
-        // Styles
-        case 'h1': runCmd('formatBlock', 'H1'); break;
-        case 'h2': runCmd('formatBlock', 'H2'); break;
-        case 'h3': runCmd('formatBlock', 'H3'); break;
-        case 'normal': runCmd('formatBlock', 'P'); break;
-        case 'quoteStyle': runCmd('formatBlock', 'BLOCKQUOTE'); break;
-        case 'codeStyle': runCmd('formatBlock', 'PRE'); break;
-        // Editing
-        case 'find': openFind(false); break;
-        case 'replace': openFind(true); break;
-        case 'wordcount': showWordCount(); break;
-        // Insert
-        case 'pagebreak': dispatch('insert-pagebreak'); break;
-        case 'pagenum': dispatch('insert-pagenum'); break;
-        case 'table': dispatch('insert-table'); break;
-        case 'image': dispatch('insert-image'); break;
-        case 'shape': dispatch('insert-shape'); break;
-        case 'link': dispatch('insert-link'); break;
-        case 'bookmark': dispatch('insert-bookmark'); break;
-        case 'emoji': dispatch('insert-emoji'); break;
-        case 'symbol': dispatch('insert-symbol'); break;
-        case 'date': dispatch('insert-date'); break;
-        case 'datetime': dispatch('insert-datetime'); break;
-        case 'hr': dispatch('insert-hr'); break;
-        case 'toc': dispatch('insert-toc'); break;
-        case 'footnote': dispatch('insert-footnote'); break;
-        case 'quoteInsert': dispatch('insert-quote'); break;
-        case 'codeInsert': dispatch('insert-code'); break;
-        // Table
-        case 'rowAbove':
-        case 'rowBelow':
-        case 'rowDelete':
-        case 'colLeft':
-        case 'colRight':
-        case 'colDelete':
-        case 'merge':
-        case 'tableDelete': {
-            const cell = tableMenuTargetCell || getCurrentTableCell();
-            const map = {
-                rowAbove: 'row-above', rowBelow: 'row-below', rowDelete: 'row-delete',
-                colLeft: 'col-left', colRight: 'col-right', colDelete: 'col-delete',
-                merge: 'merge', tableDelete: 'table-delete'
-            };
-            if (cell) runTableAction(map[action], cell);
-            break;
-        }
-        // Review
-        case 'spellcheck': dispatch('spellcheck-btn'); break;
-        case 'thesaurus': dispatch('thesaurus-btn'); break;
-        case 'readingtime': showReadingTime(); break;
-        case 'charfreq': showCharFreq(); break;
-        case 'comment': dispatch('comment-btn'); break;
-        // View
-        case 'theme': toggleTheme(); break;
-        case 'preview': dispatch('preview-btn'); break;
-        case 'fullscreen': dispatch('fullscreen-btn'); break;
-        case 'print': printDoc(); break;
-        // File
-        case 'save': saveNow(); break;
-        case 'saveas': openSaveAsModal(); break;
-        case 'back': saveNow().then(showList); break;
-    }
-    updateToolbarState();
+        updateToolbarState();
+    }, 50);
 }
 
 function openMobileSheet() {
@@ -2109,9 +2118,14 @@ function openMobileSheet() {
         } catch (_) { }
     }
     switchSheetTab(defaultTab);
+    sheetTouchMoved = false;
     mobileSheet.classList.remove('hidden');
 }
-mobileSheetClose?.addEventListener('click', () => mobileSheet.classList.add('hidden'));
+
+mobileSheetClose?.addEventListener('click', () => {
+    mobileSheet.classList.add('hidden');
+    sheetTouchMoved = false;
+});
 
 /* =========================================================
    FILE MENU
