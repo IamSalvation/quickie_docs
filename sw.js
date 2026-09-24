@@ -1,9 +1,9 @@
 /* =========================================================
    Quickie Docs — Service Worker
-   v1.4.3 — Mobile sheet stability fixes
+   v1.4.4 — Mobile sheet stability fixes
    ========================================================= */
 
-const VERSION = 'v1.4.3';
+const VERSION = 'v1.4.4';
 const APP_CACHE = `quickie-docs-app-${VERSION}`;
 const CDN_CACHE = `quickie-docs-cdn-${VERSION}`;
 const RUNTIME_CACHE = `quickie-docs-runtime-${VERSION}`;

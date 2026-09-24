@@ -594,7 +594,7 @@
         </div>
         <!-- =============== END RIBBON =============== -->
 
-        <!-- COMPACT TOOLBAR -->
+        <!-- COMPACT TOOLBAR (desktop optional) -->
         <div id="compact-toolbar" class="toolbar hidden">
             <button data-cmd="undo" title="Undo">↶</button>
             <button data-cmd="redo" title="Redo">↷</button>
@@ -684,158 +684,98 @@
             <button data-table-action="table-delete" class="danger">🗑 Delete table</button>
         </div>
 
-        <!-- MOBILE BOTTOM ACTION BAR -->
+        <!-- ============ MOBILE BOTTOM TOOLBAR (2 rows) ============ -->
         <div id="mobile-bar" class="mobile-bar" aria-label="Mobile toolbar">
-            <button class="mb-btn" data-mb="undo" title="Undo">↶</button>
-            <button class="mb-btn" data-mb="redo" title="Redo">↷</button>
-            <button class="mb-btn" data-mb="bold" title="Bold"><b>B</b></button>
-            <button class="mb-btn" data-mb="italic" title="Italic"><i>I</i></button>
-            <button class="mb-btn" data-mb="underline" title="Underline"><u>U</u></button>
-            <button class="mb-btn" data-mb="heading" title="Heading">H</button>
-            <button class="mb-btn" data-mb="bullet" title="Bullet list">•</button>
-            <button class="mb-btn" data-mb="more" title="More">⋯</button>
-        </div>
 
-        <!-- MOBILE SHEET — tabbed -->
-        <div id="mobile-sheet" class="mobile-sheet hidden">
-            <div class="mobile-sheet-header">
-                <div class="mobile-sheet-tabs">
-                    <button class="sheet-tab active" data-sheet-tab="home">Home</button>
-                    <button class="sheet-tab" data-sheet-tab="insert">Insert</button>
-                    <button class="sheet-tab" data-sheet-tab="table" id="sheet-table-tab"
-                        style="display:none">Table</button>
-                    <button class="sheet-tab" data-sheet-tab="review">Review</button>
-                    <button class="sheet-tab" data-sheet-tab="view">View</button>
-                </div>
-                <button id="mobile-sheet-close" class="mobile-sheet-close">✕</button>
+            <!-- Row 1: always visible essentials -->
+            <div class="mb-row mb-row-primary">
+                <button class="mb-btn" data-mb="undo" title="Undo">↶</button>
+                <button class="mb-btn" data-mb="redo" title="Redo">↷</button>
+                <button class="mb-btn" data-mb="bold" title="Bold" data-sticky="bold"><b>B</b></button>
+                <button class="mb-btn" data-mb="italic" title="Italic" data-sticky="italic"><i>I</i></button>
+                <button class="mb-btn" data-mb="underline" title="Underline" data-sticky="underline"><u>U</u></button>
+                <button class="mb-btn" data-mb="heading" title="Heading 2">H</button>
+                <button class="mb-btn" data-mb="bullet" title="Bullet list">•</button>
+                <button class="mb-btn" data-mb="more" title="More tools">⋯</button>
             </div>
 
+            <!-- Row 2: horizontally scrollable tool strip -->
+            <div class="mb-row mb-row-scroll">
+                <button class="mb-btn" data-mb="strikeThrough" title="Strikethrough"
+                    data-sticky="strikeThrough"><s>S</s></button>
+                <button class="mb-btn" data-mb="superscript" title="Superscript" data-sticky="superscript">x²</button>
+                <button class="mb-btn" data-mb="subscript" title="Subscript" data-sticky="subscript">x₂</button>
+                <span class="mb-sep"></span>
+                <button class="mb-btn" data-mb="h1" title="Heading 1">H1</button>
+                <button class="mb-btn" data-mb="h2" title="Heading 2">H2</button>
+                <button class="mb-btn" data-mb="h3" title="Heading 3">H3</button>
+                <button class="mb-btn" data-mb="normal" title="Normal">¶</button>
+                <button class="mb-btn" data-mb="quoteStyle" title="Quote">❝</button>
+                <button class="mb-btn" data-mb="codeStyle" title="Code">{ }</button>
+                <span class="mb-sep"></span>
+                <button class="mb-btn" data-mb="ordered" title="Numbered list">1.</button>
+                <button class="mb-btn" data-mb="tasklist" title="Checklist">☑</button>
+                <button class="mb-btn" data-mb="outdent" title="Outdent">⇤</button>
+                <button class="mb-btn" data-mb="indent" title="Indent">⇥</button>
+                <span class="mb-sep"></span>
+                <button class="mb-btn" data-mb="alignLeft" title="Align left">⬅</button>
+                <button class="mb-btn" data-mb="alignCenter" title="Align center">↔</button>
+                <button class="mb-btn" data-mb="alignRight" title="Align right">➡</button>
+                <button class="mb-btn" data-mb="alignJustify" title="Justify">☰</button>
+                <span class="mb-sep"></span>
+                <button class="mb-btn" data-mb="link" title="Insert link">🔗</button>
+                <button class="mb-btn" data-mb="image" title="Insert image">🖼</button>
+                <button class="mb-btn" data-mb="table" title="Insert table">▦</button>
+                <button class="mb-btn" data-mb="hr" title="Divider">―</button>
+                <button class="mb-btn" data-mb="date" title="Insert date">📅</button>
+                <span class="mb-sep"></span>
+                <button class="mb-btn" data-mb="find" title="Find">🔍</button>
+                <button class="mb-btn" data-mb="wordcount" title="Word count">#</button>
+                <button class="mb-btn" data-mb="clearFormat" title="Clear formatting">✕</button>
+            </div>
+
+        </div>
+
+        <!-- ============ MOBILE SHEET — rare tools only ============ -->
+        <div id="mobile-sheet" class="mobile-sheet hidden">
+            <div class="mobile-sheet-header">
+                <span>More tools</span>
+                <button id="mobile-sheet-close" class="mobile-sheet-close">✕</button>
+            </div>
             <div class="mobile-sheet-body">
+                <div class="sheet-section-title">Pages</div>
+                <button class="sheet-btn" data-sheet="pagebreak">⎯ — Page Break</button>
+                <button class="sheet-btn" data-sheet="pagenum"># — Page number</button>
 
-                <!-- HOME PANEL -->
-                <div class="sheet-panel active" data-sheet-panel="home">
-                    <div class="sheet-section-title">History</div>
-                    <button class="sheet-btn" data-sheet="undo">↶ Undo</button>
-                    <button class="sheet-btn" data-sheet="redo">↷ Redo</button>
+                <div class="sheet-section-title">Links</div>
+                <button class="sheet-btn" data-sheet="bookmark">🔖 — Bookmark</button>
 
-                    <div class="sheet-section-title">Font</div>
-                    <button class="sheet-btn" data-sheet="bold">B — Bold</button>
-                    <button class="sheet-btn" data-sheet="italic">I — Italic</button>
-                    <button class="sheet-btn" data-sheet="underline">U — Underline</button>
-                    <button class="sheet-btn" data-sheet="strikeThrough">S — Strikethrough</button>
-                    <button class="sheet-btn" data-sheet="superscript">x² — Superscript</button>
-                    <button class="sheet-btn" data-sheet="subscript">x₂ — Subscript</button>
-                    <button class="sheet-btn" data-sheet="textCase">Aa — Change case</button>
-                    <button class="sheet-btn" data-sheet="textColor">A — Text color</button>
-                    <button class="sheet-btn" data-sheet="highlight">🖍 — Highlight</button>
-                    <button class="sheet-btn" data-sheet="clearFormat">✕ — Clear formatting</button>
+                <div class="sheet-section-title">Text</div>
+                <button class="sheet-btn" data-sheet="datetime">🕐 — Date + Time</button>
+                <button class="sheet-btn" data-sheet="toc">☰ — Table of Contents</button>
+                <button class="sheet-btn" data-sheet="footnote">⁽¹⁾ — Footnote</button>
+                <button class="sheet-btn" data-sheet="quoteInsert">❝ — Quote block</button>
+                <button class="sheet-btn" data-sheet="codeInsert">{ } — Code block</button>
+                <button class="sheet-btn" data-sheet="emoji">😀 — Emoji</button>
+                <button class="sheet-btn" data-sheet="symbol">Ω — Symbol</button>
+                <button class="sheet-btn" data-sheet="shape">▭ — Shape</button>
+                <button class="sheet-btn" data-sheet="textCase">Aa — Change case</button>
 
-                    <div class="sheet-section-title">Paragraph</div>
-                    <button class="sheet-btn" data-sheet="bullet">• — Bullet list</button>
-                    <button class="sheet-btn" data-sheet="ordered">1. — Numbered list</button>
-                    <button class="sheet-btn" data-sheet="tasklist">☑ — Checklist</button>
-                    <button class="sheet-btn" data-sheet="outdent">⇤ — Decrease indent</button>
-                    <button class="sheet-btn" data-sheet="indent">⇥ — Increase indent</button>
-                    <button class="sheet-btn" data-sheet="alignLeft">⬅ — Align left</button>
-                    <button class="sheet-btn" data-sheet="alignCenter">↔ — Align center</button>
-                    <button class="sheet-btn" data-sheet="alignRight">➡ — Align right</button>
-                    <button class="sheet-btn" data-sheet="alignJustify">☰ — Justify</button>
+                <div class="sheet-section-title">Review</div>
+                <button class="sheet-btn" data-sheet="spellcheck">✔ — Spell check</button>
+                <button class="sheet-btn" data-sheet="thesaurus">📖 — Thesaurus</button>
+                <button class="sheet-btn" data-sheet="readingtime">⏱ — Reading time</button>
+                <button class="sheet-btn" data-sheet="charfreq">🔤 — Character frequency</button>
+                <button class="sheet-btn" data-sheet="comment">💬 — Add comment</button>
 
-                    <div class="sheet-section-title">Styles</div>
-                    <button class="sheet-btn" data-sheet="h1">H1 — Heading 1</button>
-                    <button class="sheet-btn" data-sheet="h2">H2 — Heading 2</button>
-                    <button class="sheet-btn" data-sheet="h3">H3 — Heading 3</button>
-                    <button class="sheet-btn" data-sheet="normal">¶ — Normal</button>
-                    <button class="sheet-btn" data-sheet="quoteStyle">❝ — Quote block</button>
-                    <button class="sheet-btn" data-sheet="codeStyle">{ } — Code block</button>
-
-                    <div class="sheet-section-title">Editing</div>
-                    <button class="sheet-btn" data-sheet="find">🔍 — Find</button>
-                    <button class="sheet-btn" data-sheet="replace">⇄ — Find & Replace</button>
-                    <button class="sheet-btn" data-sheet="wordcount"># — Word count</button>
-                </div>
-
-                <!-- INSERT PANEL -->
-                <div class="sheet-panel" data-sheet-panel="insert">
-                    <div class="sheet-section-title">Pages</div>
-                    <button class="sheet-btn" data-sheet="pagebreak">⎯ — Page Break</button>
-                    <button class="sheet-btn" data-sheet="pagenum"># — Page number</button>
-
-                    <div class="sheet-section-title">Tables</div>
-                    <button class="sheet-btn" data-sheet="table">▦ — Insert table</button>
-
-                    <div class="sheet-section-title">Illustrations</div>
-                    <button class="sheet-btn" data-sheet="image">🖼 — Picture</button>
-                    <button class="sheet-btn" data-sheet="shape">▭ — Shape</button>
-
-                    <div class="sheet-section-title">Links</div>
-                    <button class="sheet-btn" data-sheet="link">🔗 — Insert link</button>
-                    <button class="sheet-btn" data-sheet="bookmark">🔖 — Bookmark</button>
-
-                    <div class="sheet-section-title">Symbols</div>
-                    <button class="sheet-btn" data-sheet="emoji">😀 — Emoji</button>
-                    <button class="sheet-btn" data-sheet="symbol">Ω — Symbol</button>
-
-                    <div class="sheet-section-title">Text</div>
-                    <button class="sheet-btn" data-sheet="date">📅 — Date</button>
-                    <button class="sheet-btn" data-sheet="datetime">🕐 — Date + Time</button>
-                    <button class="sheet-btn" data-sheet="hr">― — Divider</button>
-                    <button class="sheet-btn" data-sheet="toc">☰ — Table of Contents</button>
-                    <button class="sheet-btn" data-sheet="footnote">⁽¹⁾ — Footnote</button>
-                    <button class="sheet-btn" data-sheet="quoteInsert">❝ — Quote</button>
-                    <button class="sheet-btn" data-sheet="codeInsert">{ } — Code block</button>
-                </div>
-
-                <!-- TABLE PANEL -->
-                <div class="sheet-panel" data-sheet-panel="table">
-                    <div class="sheet-section-title">Rows</div>
-                    <button class="sheet-btn" data-sheet="rowAbove">⬆ — Insert row above</button>
-                    <button class="sheet-btn" data-sheet="rowBelow">⬇ — Insert row below</button>
-                    <button class="sheet-btn" data-sheet="rowDelete">🗑 — Delete row</button>
-
-                    <div class="sheet-section-title">Columns</div>
-                    <button class="sheet-btn" data-sheet="colLeft">⬅ — Insert column left</button>
-                    <button class="sheet-btn" data-sheet="colRight">➡ — Insert column right</button>
-                    <button class="sheet-btn" data-sheet="colDelete">🗑 — Delete column</button>
-
-                    <div class="sheet-section-title">Cells</div>
-                    <button class="sheet-btn" data-sheet="merge">⊞ — Merge cells</button>
-                    <button class="sheet-btn" data-sheet="tableDelete">🗑 — Delete table</button>
-                </div>
-
-                <!-- REVIEW PANEL -->
-                <div class="sheet-panel" data-sheet-panel="review">
-                    <div class="sheet-section-title">Proofing</div>
-                    <button class="sheet-btn" data-sheet="spellcheck">✔ — Spell check</button>
-                    <button class="sheet-btn" data-sheet="thesaurus">📖 — Thesaurus</button>
-
-                    <div class="sheet-section-title">Statistics</div>
-                    <button class="sheet-btn" data-sheet="wordcount"># — Word count</button>
-                    <button class="sheet-btn" data-sheet="readingtime">⏱ — Reading time</button>
-                    <button class="sheet-btn" data-sheet="charfreq">🔤 — Character frequency</button>
-
-                    <div class="sheet-section-title">Comments</div>
-                    <button class="sheet-btn" data-sheet="comment">💬 — Add comment</button>
-                </div>
-
-                <!-- VIEW PANEL -->
-                <div class="sheet-panel" data-sheet-panel="view">
-                    <div class="sheet-section-title">Theme</div>
-                    <button class="sheet-btn" data-sheet="theme">🌙 — Toggle theme</button>
-
-                    <div class="sheet-section-title">Views</div>
-                    <button class="sheet-btn" data-sheet="preview">👁 — Preview</button>
-
-                    <div class="sheet-section-title">Window</div>
-                    <button class="sheet-btn" data-sheet="fullscreen">⛶ — Fullscreen</button>
-                    <button class="sheet-btn" data-sheet="print">🖨 — Print / PDF</button>
-
-                    <div class="sheet-section-title">File</div>
-                    <button class="sheet-btn" data-sheet="save">💾 — Save</button>
-                    <button class="sheet-btn" data-sheet="saveas">⬇ — Save As…</button>
-                    <button class="sheet-btn" data-sheet="back">← — Back to list</button>
-                </div>
-
+                <div class="sheet-section-title">View & File</div>
+                <button class="sheet-btn" data-sheet="theme">🌙 — Toggle theme</button>
+                <button class="sheet-btn" data-sheet="preview">👁 — Preview</button>
+                <button class="sheet-btn" data-sheet="fullscreen">⛶ — Fullscreen</button>
+                <button class="sheet-btn" data-sheet="print">🖨 — Print / PDF</button>
+                <button class="sheet-btn" data-sheet="save">💾 — Save</button>
+                <button class="sheet-btn" data-sheet="saveas">⬇ — Save As…</button>
+                <button class="sheet-btn" data-sheet="back">← — Back to list</button>
             </div>
         </div>
 

@@ -1,6 +1,6 @@
 /* =========================================================
-   Quickie Docs — v1.4.3
-   iOS selection fixes + tabbed mobile sheet + scroll-safe touch
+   Quickie Docs — v1.4.4
+   2-row mobile bar + sticky formatting + all mobile fixes
    ========================================================= */
 
 // ---------- IndexedDB ----------
@@ -120,6 +120,18 @@ let currentFindIndex = 0;
 let findMatches = [];
 const fileHandles = {};
 
+// Sticky formatting state
+const activeFormats = {
+    bold: false,
+    italic: false,
+    underline: false,
+    strikeThrough: false,
+    superscript: false,
+    subscript: false,
+    foreColor: null,
+    hiliteColor: null
+};
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 function formatDate(ts) {
     const d = new Date(ts);
@@ -155,7 +167,10 @@ function restoreSelection() {
     } catch (_) { return false; }
 }
 document.addEventListener('selectionchange', () => {
-    if (!editorView.classList.contains('hidden')) saveSelection();
+    if (!editorView.classList.contains('hidden')) {
+        saveSelection();
+        syncStickyFromCursor();
+    }
 });
 editorEl.addEventListener('touchend', () => { setTimeout(saveSelection, 0); }, { passive: true });
 ['touchstart', 'touchmove', 'touchend'].forEach(ev => {
@@ -171,6 +186,102 @@ editorEl.addEventListener('touchend', () => { setTimeout(saveSelection, 0); }, {
 });
 editorEl.addEventListener('mouseup', () => { setTimeout(saveSelection, 0); });
 editorEl.addEventListener('blur', saveSelection);
+
+/* =========================================================
+   STICKY FORMATTING
+   Tracks which character formats are "active" so new typing
+   inherits them without relying on contenteditable's broken
+   built-in state.
+   ========================================================= */
+function hasActiveSelection() {
+    const sel = window.getSelection();
+    return sel && !sel.isCollapsed && savedRange;
+}
+
+function setActiveFormat(name, on) {
+    activeFormats[name] = on;
+    updateStickyButtons();
+}
+
+function updateStickyButtons() {
+    document.querySelectorAll('[data-sticky]').forEach(btn => {
+        const fmt = btn.dataset.sticky;
+        btn.classList.toggle('active', !!activeFormats[fmt]);
+    });
+}
+
+// Called when the cursor moves — sync sticky state to what's
+// actually under the cursor so the buttons reflect reality.
+function syncStickyFromCursor() {
+    if (hasActiveSelection()) return; // don't override during selection
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const node = sel.anchorNode;
+    if (!node || !editorEl.contains(node)) return;
+    if (node.nodeType === 3 && node.parentElement) {
+        const el = node.parentElement;
+        const style = window.getComputedStyle(el);
+        activeFormats.bold = /bold|[6-9]00/.test(style.fontWeight);
+        activeFormats.italic = style.fontStyle === 'italic';
+        activeFormats.underline = style.textDecorationLine.includes('underline');
+        activeFormats.strikeThrough = style.textDecorationLine.includes('line-through');
+        activeFormats.superscript = style.verticalAlign === 'super';
+        activeFormats.subscript = style.verticalAlign === 'sub';
+        // Don't auto-clear colors — user intent isn't obvious
+    }
+    updateStickyButtons();
+}
+
+// Toggle a sticky format on/off. If text is selected, apply it
+// to the selection AND leave the sticky state on so continued
+// typing inherits it.
+function toggleStickyFormat(cmd) {
+    const wasOn = !!activeFormats[cmd];
+    const nowOn = !wasOn;
+
+    if (hasActiveSelection()) {
+        // Apply to selection
+        restoreSelection();
+        document.execCommand('styleWithCSS', false, true);
+        document.execCommand(cmd, false, null);
+        saveSelection();
+    } else if (nowOn) {
+        // Turn on for next typing
+        restoreSelection();
+        document.execCommand('styleWithCSS', false, true);
+        document.execCommand(cmd, false, null);
+        // Immediately turn it off again so we don't leave stray state
+        document.execCommand(cmd, false, null);
+    }
+
+    setActiveFormat(cmd, nowOn);
+    scheduleSave();
+    editorEl.focus();
+}
+
+// Apply active formats to the next typed character(s).
+// We hook into input and re-tag the just-typed text if needed.
+// Simpler approach: whenever the user types and a sticky format
+// is on but the cursor isn't already in that format, wrap the
+// insertion.
+editorEl.addEventListener('beforeinput', e => {
+    if (e.inputType !== 'insertText' && e.inputType !== 'insertCompositionText') return;
+    if (!editorEl.contains(e.target)) return;
+    // Sticky formats will be applied after the input by the browser
+    // via execCommand state. We handle ensuring the execCommand state
+    // matches our sticky state right before typing.
+    ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'].forEach(cmd => {
+        let current = false;
+        try { current = document.queryCommandState(cmd); } catch (_) { }
+        const desired = !!activeFormats[cmd];
+        if (current !== desired) {
+            try {
+                document.execCommand('styleWithCSS', false, true);
+                document.execCommand(cmd, false, null);
+            } catch (_) { }
+        }
+    });
+});
 
 /* =========================================================
    THEME
@@ -261,7 +372,7 @@ installBtn?.addEventListener('click', async () => {
 window.addEventListener('appinstalled', () => installBtn?.classList.add('hidden'));
 
 /* =========================================================
-   COLLAPSE
+   COLLAPSE (desktop ribbon)
    ========================================================= */
 const COLLAPSE_WIDTH = 900;
 const MIN_ITEMS_TO_COLLAPSE = 2;
@@ -300,10 +411,9 @@ document.querySelectorAll('.ribbon-tabs .tab').forEach(tab => {
 });
 
 /* =========================================================
-   TABLE TAB AUTO-SHOW
+   TABLE TAB AUTO-SHOW (desktop)
    ========================================================= */
 const tableTabBtn = document.getElementById('table-tab-btn');
-const sheetTableTab = document.getElementById('sheet-table-tab');
 document.addEventListener('selectionchange', () => {
     if (editorView.classList.contains('hidden')) return;
     const sel = window.getSelection();
@@ -320,11 +430,10 @@ document.addEventListener('selectionchange', () => {
             document.querySelector('.ribbon-tabs .tab[data-tab="home"]')?.click();
         }
     }
-    if (sheetTableTab) sheetTableTab.style.display = inTable ? '' : 'none';
 });
 
 /* =========================================================
-   EXEC CMD
+   EXEC CMD (non-sticky commands)
    ========================================================= */
 function runCmd(cmd, value = null) {
     restoreSelection();
@@ -356,23 +465,36 @@ function attachPointerHandler(el, handler) {
         handler(e);
     });
 }
+
+// Wire up ribbon buttons — sticky ones use toggleStickyFormat
 document.querySelectorAll('button[data-cmd]').forEach(btn => {
+    const cmd = btn.dataset.cmd;
+    const isSticky = ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'].includes(cmd);
     attachPointerHandler(btn, () => {
-        runCmd(btn.dataset.cmd, btn.dataset.value || null);
+        if (isSticky) {
+            toggleStickyFormat(cmd);
+        } else {
+            runCmd(cmd, btn.dataset.value || null);
+        }
         updateToolbarState();
     });
 });
 
 /* =========================================================
-   DROPDOWN ITEMS
+   DROPDOWN ITEMS (desktop ribbon)
    ========================================================= */
 function handleDropdownItem(li, e) {
     if (!li) return;
     if (e) { e.preventDefault(); e.stopPropagation(); }
     li.closest('.group-dropdown')?.classList.remove('open');
     restoreSelection();
-    if (li.dataset.targetCmd) runCmd(li.dataset.targetCmd, li.dataset.targetValue || null);
-    else if (li.dataset.targetId) {
+
+    if (li.dataset.targetCmd) {
+        const cmd = li.dataset.targetCmd;
+        const isSticky = ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'].includes(cmd);
+        if (isSticky) toggleStickyFormat(cmd);
+        else runCmd(cmd, li.dataset.targetValue || null);
+    } else if (li.dataset.targetId) {
         const target = document.getElementById(li.dataset.targetId);
         if (target) target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     }
@@ -527,6 +649,12 @@ async function openDoc(id) {
     editorEl.innerHTML = doc.content || '';
     saveStatus.textContent = '';
     savedRange = null;
+    // Reset sticky state on doc open
+    Object.keys(activeFormats).forEach(k => {
+        if (typeof activeFormats[k] === 'boolean') activeFormats[k] = false;
+        else activeFormats[k] = null;
+    });
+    updateStickyButtons();
     listView.classList.add('hidden');
     editorView.classList.remove('hidden');
     editorEl.focus();
@@ -1142,13 +1270,16 @@ function printDoc() {
    TOOLBAR STATE
    ========================================================= */
 function updateToolbarState() {
-    ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript',
-        'insertUnorderedList', 'insertOrderedList',
+    // Update sticky buttons from our own state
+    updateStickyButtons();
+    // Update non-sticky alignment/list buttons from DOM query
+    ['insertUnorderedList', 'insertOrderedList',
         'justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull'].forEach(cmd => {
             let active = false;
             try { active = document.queryCommandState(cmd); } catch (_) { }
-            document.querySelectorAll(`[data-cmd="${cmd}"]`).forEach(btn => btn.classList.toggle('active', active));
-            document.querySelectorAll(`[data-mb="${cmd}"]`).forEach(btn => btn.classList.toggle('active', active));
+            document.querySelectorAll(`[data-cmd="${cmd}"], [data-mb="${cmd}"]`).forEach(btn => {
+                btn.classList.toggle('active', active);
+            });
         });
 }
 document.addEventListener('selectionchange', () => {
@@ -1348,6 +1479,9 @@ initColorPickers();
    ========================================================= */
 attachPointerHandler(document.getElementById('clear-format'), () => {
     runCmd('removeFormat');
+    // Also reset sticky formats
+    ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'].forEach(f => activeFormats[f] = false);
+    updateStickyButtons();
     scheduleSave();
 });
 document.getElementById('line-height')?.addEventListener('change', e => {
@@ -1898,66 +2032,104 @@ document.getElementById('compact-toggle')?.addEventListener('click', () => {
 });
 
 /* =========================================================
-   MOBILE BOTTOM BAR
+   MOBILE BOTTOM BAR — both rows
    ========================================================= */
-mobileBar?.addEventListener('touchstart', e => {
+mobileBar?.addEventListener('pointerdown', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
     e.preventDefault();
-    handleMobileBar(btn.dataset.mb);
-}, { passive: false });
-mobileBar?.addEventListener('click', e => {
+    handleMobileBar(btn.dataset.mb, btn);
+});
+
+// Fallback for browsers without pointerdown in the mobile bar
+mobileBar?.addEventListener('touchstart', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
-    handleMobileBar(btn.dataset.mb);
-});
-function handleMobileBar(cmd) {
+    if (e.defaultPrevented) return;
+    e.preventDefault();
+    handleMobileBar(btn.dataset.mb, btn);
+}, { passive: false });
+
+function handleMobileBar(cmd, btn) {
+    if (!cmd) return;
+    const STICKY = ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'];
+
+    if (STICKY.includes(cmd)) {
+        toggleStickyFormat(cmd);
+        return;
+    }
+
     switch (cmd) {
         case 'undo': runCmd('undo'); break;
         case 'redo': runCmd('redo'); break;
-        case 'bold': runCmd('bold'); break;
-        case 'italic': runCmd('italic'); break;
-        case 'underline': runCmd('underline'); break;
+
         case 'heading': runCmd('formatBlock', 'H2'); break;
+
         case 'bullet': runCmd('insertUnorderedList'); break;
+        case 'ordered': runCmd('insertOrderedList'); break;
+        case 'tasklist': {
+            const el = document.getElementById('insert-tasklist');
+            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            break;
+        }
+        case 'outdent': runCmd('outdent'); break;
+        case 'indent': runCmd('indent'); break;
+
+        case 'h1': runCmd('formatBlock', 'H1'); break;
+        case 'h2': runCmd('formatBlock', 'H2'); break;
+        case 'h3': runCmd('formatBlock', 'H3'); break;
+        case 'normal': runCmd('formatBlock', 'P'); break;
+        case 'quoteStyle': runCmd('formatBlock', 'BLOCKQUOTE'); break;
+        case 'codeStyle': runCmd('formatBlock', 'PRE'); break;
+
+        case 'alignLeft': runCmd('justifyLeft'); break;
+        case 'alignCenter': runCmd('justifyCenter'); break;
+        case 'alignRight': runCmd('justifyRight'); break;
+        case 'alignJustify': runCmd('justifyFull'); break;
+
+        case 'link': {
+            const el = document.getElementById('insert-link');
+            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            break;
+        }
+        case 'image': {
+            const el = document.getElementById('insert-image');
+            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            break;
+        }
+        case 'table': {
+            const el = document.getElementById('insert-table');
+            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            break;
+        }
+        case 'hr': runCmd('insertHorizontalRule'); break;
+        case 'date': {
+            const el = document.getElementById('insert-date');
+            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            break;
+        }
+
+        case 'find': openFind(false); break;
+        case 'wordcount': showWordCount(); break;
+        case 'clearFormat': {
+            runCmd('removeFormat');
+            ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'].forEach(f => activeFormats[f] = false);
+            updateStickyButtons();
+            scheduleSave();
+            break;
+        }
+
         case 'more': openMobileSheet(); return;
     }
     updateToolbarState();
 }
 
 /* =========================================================
-   MOBILE SHEET — TABBED + SCROLL-SAFE (FIXED)
+   MOBILE SHEET — rare tools only + scroll-safe
    ========================================================= */
 let sheetTouchStartX = 0;
 let sheetTouchStartY = 0;
 let sheetTouchMoved = false;
-let sheetActiveTab = 'home';
-
-function switchSheetTab(name) {
-    if (!name) return;
-    sheetActiveTab = name;
-    mobileSheet.querySelectorAll('.sheet-tab').forEach(t =>
-        t.classList.toggle('active', t.dataset.sheetTab === name)
-    );
-    mobileSheet.querySelectorAll('.sheet-panel').forEach(p =>
-        p.classList.toggle('active', p.dataset.sheetPanel === name)
-    );
-    try { sessionStorage.setItem('quickie-sheet-tab', name); } catch (_) { }
-}
-
-mobileSheet?.querySelectorAll('.sheet-tab').forEach(tab => {
-    tab.addEventListener('touchstart', e => {
-        e.preventDefault();
-        e.stopPropagation();
-        switchSheetTab(tab.dataset.sheetTab);
-        sheetTouchMoved = false;
-    }, { passive: false });
-    tab.addEventListener('click', e => {
-        e.stopPropagation();
-        switchSheetTab(tab.dataset.sheetTab);
-        sheetTouchMoved = false;
-    });
-});
 
 mobileSheet?.addEventListener('touchstart', e => {
     const btn = e.target.closest('.sheet-btn');
@@ -1986,10 +2158,7 @@ mobileSheet?.addEventListener('touchend', e => {
         sheetTouchMoved = false;
         return;
     }
-    if (sheetTouchMoved) {
-        sheetTouchMoved = false;
-        return;
-    }
+    if (sheetTouchMoved) { sheetTouchMoved = false; return; }
     e.preventDefault();
     const action = btn.dataset.sheet;
     sheetTouchMoved = false;
@@ -1999,10 +2168,7 @@ mobileSheet?.addEventListener('touchend', e => {
 mobileSheet?.addEventListener('click', e => {
     const btn = e.target.closest('.sheet-btn');
     const closeBtn = e.target.closest('.mobile-sheet-close');
-    if (closeBtn) {
-        mobileSheet.classList.add('hidden');
-        return;
-    }
+    if (closeBtn) { mobileSheet.classList.add('hidden'); return; }
     if (!btn) return;
     if (sheetTouchMoved) return;
     handleSheetAction(btn.dataset.sheet);
@@ -2019,77 +2185,18 @@ function handleSheetAction(action) {
             el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
         };
         switch (action) {
-            case 'undo': runCmd('undo'); break;
-            case 'redo': runCmd('redo'); break;
-            case 'bold': runCmd('bold'); break;
-            case 'italic': runCmd('italic'); break;
-            case 'underline': runCmd('underline'); break;
-            case 'strikeThrough': runCmd('strikeThrough'); break;
-            case 'superscript': runCmd('superscript'); break;
-            case 'subscript': runCmd('subscript'); break;
-            case 'textCase': openTextCasePrompt(); break;
-            case 'textColor': {
-                const native = document.querySelector('.color-picker[data-color-target="foreColor"] input[type="color"]');
-                if (native) native.click();
-                break;
-            }
-            case 'highlight': {
-                const native = document.querySelector('.color-picker[data-color-target="hiliteColor"] input[type="color"]');
-                if (native) native.click();
-                break;
-            }
-            case 'clearFormat': runCmd('removeFormat'); break;
-            case 'bullet': runCmd('insertUnorderedList'); break;
-            case 'ordered': runCmd('insertOrderedList'); break;
-            case 'tasklist': dispatch('insert-tasklist'); break;
-            case 'outdent': runCmd('outdent'); break;
-            case 'indent': runCmd('indent'); break;
-            case 'alignLeft': runCmd('justifyLeft'); break;
-            case 'alignCenter': runCmd('justifyCenter'); break;
-            case 'alignRight': runCmd('justifyRight'); break;
-            case 'alignJustify': runCmd('justifyFull'); break;
-            case 'h1': runCmd('formatBlock', 'H1'); break;
-            case 'h2': runCmd('formatBlock', 'H2'); break;
-            case 'h3': runCmd('formatBlock', 'H3'); break;
-            case 'normal': runCmd('formatBlock', 'P'); break;
-            case 'quoteStyle': runCmd('formatBlock', 'BLOCKQUOTE'); break;
-            case 'codeStyle': runCmd('formatBlock', 'PRE'); break;
-            case 'find': openFind(false); break;
-            case 'replace': openFind(true); break;
-            case 'wordcount': showWordCount(); break;
             case 'pagebreak': dispatch('insert-pagebreak'); break;
             case 'pagenum': dispatch('insert-pagenum'); break;
-            case 'table': dispatch('insert-table'); break;
-            case 'image': dispatch('insert-image'); break;
-            case 'shape': dispatch('insert-shape'); break;
-            case 'link': dispatch('insert-link'); break;
             case 'bookmark': dispatch('insert-bookmark'); break;
-            case 'emoji': dispatch('insert-emoji'); break;
-            case 'symbol': dispatch('insert-symbol'); break;
-            case 'date': dispatch('insert-date'); break;
             case 'datetime': dispatch('insert-datetime'); break;
-            case 'hr': dispatch('insert-hr'); break;
             case 'toc': dispatch('insert-toc'); break;
             case 'footnote': dispatch('insert-footnote'); break;
             case 'quoteInsert': dispatch('insert-quote'); break;
             case 'codeInsert': dispatch('insert-code'); break;
-            case 'rowAbove':
-            case 'rowBelow':
-            case 'rowDelete':
-            case 'colLeft':
-            case 'colRight':
-            case 'colDelete':
-            case 'merge':
-            case 'tableDelete': {
-                const cell = tableMenuTargetCell || getCurrentTableCell();
-                const map = {
-                    rowAbove: 'row-above', rowBelow: 'row-below', rowDelete: 'row-delete',
-                    colLeft: 'col-left', colRight: 'col-right', colDelete: 'col-delete',
-                    merge: 'merge', tableDelete: 'table-delete'
-                };
-                if (cell) runTableAction(map[action], cell);
-                break;
-            }
+            case 'emoji': dispatch('insert-emoji'); break;
+            case 'symbol': dispatch('insert-symbol'); break;
+            case 'shape': dispatch('insert-shape'); break;
+            case 'textCase': openTextCasePrompt(); break;
             case 'spellcheck': dispatch('spellcheck-btn'); break;
             case 'thesaurus': dispatch('thesaurus-btn'); break;
             case 'readingtime': showReadingTime(); break;
@@ -2108,20 +2215,9 @@ function handleSheetAction(action) {
 }
 
 function openMobileSheet() {
-    let defaultTab = 'home';
-    const inTable = !!getCurrentTableCell();
-    if (inTable) defaultTab = 'table';
-    else {
-        try {
-            const saved = sessionStorage.getItem('quickie-sheet-tab');
-            if (saved && ['home', 'insert', 'review', 'view'].includes(saved)) defaultTab = saved;
-        } catch (_) { }
-    }
-    switchSheetTab(defaultTab);
     sheetTouchMoved = false;
     mobileSheet.classList.remove('hidden');
 }
-
 mobileSheetClose?.addEventListener('click', () => {
     mobileSheet.classList.add('hidden');
     sheetTouchMoved = false;
@@ -2149,10 +2245,10 @@ const paletteOverlay = document.getElementById('palette-overlay');
 const paletteInput = document.getElementById('palette-input');
 const paletteList = document.getElementById('palette-list');
 const COMMANDS = [
-    { name: 'Bold', icon: 'B', run: () => runCmd('bold') },
-    { name: 'Italic', icon: 'I', run: () => runCmd('italic') },
-    { name: 'Underline', icon: 'U', run: () => runCmd('underline') },
-    { name: 'Strikethrough', icon: 'S', run: () => runCmd('strikeThrough') },
+    { name: 'Bold', icon: 'B', run: () => toggleStickyFormat('bold') },
+    { name: 'Italic', icon: 'I', run: () => toggleStickyFormat('italic') },
+    { name: 'Underline', icon: 'U', run: () => toggleStickyFormat('underline') },
+    { name: 'Strikethrough', icon: 'S', run: () => toggleStickyFormat('strikeThrough') },
     { name: 'Heading 1', icon: 'H1', run: () => runCmd('formatBlock', 'H1') },
     { name: 'Heading 2', icon: 'H2', run: () => runCmd('formatBlock', 'H2') },
     { name: 'Heading 3', icon: 'H3', run: () => runCmd('formatBlock', 'H3') },
@@ -2285,9 +2381,9 @@ document.addEventListener('keydown', e => {
     }
     switch (key) {
         case 's': e.preventDefault(); e.stopPropagation(); saveNow(); return;
-        case 'b': e.preventDefault(); e.stopPropagation(); runCmd('bold'); updateToolbarState(); return;
-        case 'i': e.preventDefault(); e.stopPropagation(); runCmd('italic'); updateToolbarState(); return;
-        case 'u': e.preventDefault(); e.stopPropagation(); runCmd('underline'); updateToolbarState(); return;
+        case 'b': e.preventDefault(); e.stopPropagation(); toggleStickyFormat('bold'); return;
+        case 'i': e.preventDefault(); e.stopPropagation(); toggleStickyFormat('italic'); return;
+        case 'u': e.preventDefault(); e.stopPropagation(); toggleStickyFormat('underline'); return;
         case 'k': e.preventDefault(); e.stopPropagation(); document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); return;
         case 'p': e.preventDefault(); e.stopPropagation(); printDoc(); return;
         case 'f':
@@ -2363,4 +2459,5 @@ if ('serviceWorker' in navigator) {
     renderList();
     updateCollapse();
     updateSaveAsHint();
+    updateStickyButtons();
 })();
