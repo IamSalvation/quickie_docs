@@ -3,7 +3,7 @@
    v1.4.5 — Mobile sheet stability fixes
    ========================================================= */
 
-const VERSION = 'v1.4.5';
+const VERSION = 'v1.4.6';
 const APP_CACHE = `quickie-docs-app-${VERSION}`;
 const CDN_CACHE = `quickie-docs-cdn-${VERSION}`;
 const RUNTIME_CACHE = `quickie-docs-runtime-${VERSION}`;

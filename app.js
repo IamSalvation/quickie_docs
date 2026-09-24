@@ -1,6 +1,7 @@
 /* =========================================================
-   Quickie Docs — v1.4.4
-   2-row mobile bar + sticky formatting + all mobile fixes
+   Quickie Docs — v1.4.5
+   2-row mobile bar + sticky formatting + image picker fix
+   + import focus/save fix
    ========================================================= */
 
 // ---------- IndexedDB ----------
@@ -120,7 +121,6 @@ let currentFindIndex = 0;
 let findMatches = [];
 const fileHandles = {};
 
-// Sticky formatting state
 const activeFormats = {
     bold: false,
     italic: false,
@@ -146,7 +146,7 @@ function isMobile() {
 }
 
 /* =========================================================
-   SELECTION MEMORY — critical for iOS Safari
+   SELECTION MEMORY
    ========================================================= */
 function saveSelection() {
     const sel = window.getSelection();
@@ -189,31 +189,23 @@ editorEl.addEventListener('blur', saveSelection);
 
 /* =========================================================
    STICKY FORMATTING
-   Tracks which character formats are "active" so new typing
-   inherits them without relying on contenteditable's broken
-   built-in state.
    ========================================================= */
 function hasActiveSelection() {
     const sel = window.getSelection();
     return sel && !sel.isCollapsed && savedRange;
 }
-
 function setActiveFormat(name, on) {
     activeFormats[name] = on;
     updateStickyButtons();
 }
-
 function updateStickyButtons() {
     document.querySelectorAll('[data-sticky]').forEach(btn => {
         const fmt = btn.dataset.sticky;
         btn.classList.toggle('active', !!activeFormats[fmt]);
     });
 }
-
-// Called when the cursor moves — sync sticky state to what's
-// actually under the cursor so the buttons reflect reality.
 function syncStickyFromCursor() {
-    if (hasActiveSelection()) return; // don't override during selection
+    if (hasActiveSelection()) return;
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return;
     const node = sel.anchorNode;
@@ -227,30 +219,22 @@ function syncStickyFromCursor() {
         activeFormats.strikeThrough = style.textDecorationLine.includes('line-through');
         activeFormats.superscript = style.verticalAlign === 'super';
         activeFormats.subscript = style.verticalAlign === 'sub';
-        // Don't auto-clear colors — user intent isn't obvious
     }
     updateStickyButtons();
 }
-
-// Toggle a sticky format on/off. If text is selected, apply it
-// to the selection AND leave the sticky state on so continued
-// typing inherits it.
 function toggleStickyFormat(cmd) {
     const wasOn = !!activeFormats[cmd];
     const nowOn = !wasOn;
 
     if (hasActiveSelection()) {
-        // Apply to selection
         restoreSelection();
         document.execCommand('styleWithCSS', false, true);
         document.execCommand(cmd, false, null);
         saveSelection();
     } else if (nowOn) {
-        // Turn on for next typing
         restoreSelection();
         document.execCommand('styleWithCSS', false, true);
         document.execCommand(cmd, false, null);
-        // Immediately turn it off again so we don't leave stray state
         document.execCommand(cmd, false, null);
     }
 
@@ -259,17 +243,9 @@ function toggleStickyFormat(cmd) {
     editorEl.focus();
 }
 
-// Apply active formats to the next typed character(s).
-// We hook into input and re-tag the just-typed text if needed.
-// Simpler approach: whenever the user types and a sticky format
-// is on but the cursor isn't already in that format, wrap the
-// insertion.
 editorEl.addEventListener('beforeinput', e => {
     if (e.inputType !== 'insertText' && e.inputType !== 'insertCompositionText') return;
     if (!editorEl.contains(e.target)) return;
-    // Sticky formats will be applied after the input by the browser
-    // via execCommand state. We handle ensuring the execCommand state
-    // matches our sticky state right before typing.
     ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'].forEach(cmd => {
         let current = false;
         try { current = document.queryCommandState(cmd); } catch (_) { }
@@ -649,7 +625,6 @@ async function openDoc(id) {
     editorEl.innerHTML = doc.content || '';
     saveStatus.textContent = '';
     savedRange = null;
-    // Reset sticky state on doc open
     Object.keys(activeFormats).forEach(k => {
         if (typeof activeFormats[k] === 'boolean') activeFormats[k] = false;
         else activeFormats[k] = null;
@@ -1231,6 +1206,15 @@ async function createImportedDoc(filename, html) {
     await dbPut(doc);
     await openDoc(doc.id);
     flashStatus('Imported ✓');
+    // Force-focus on mobile after the file picker closes so typing
+    // immediately works and auto-save kicks in
+    setTimeout(() => {
+        try {
+            editorEl.focus({ preventScroll: false });
+            // Force a save after focus so any initial state is persisted
+            scheduleSave();
+        } catch (_) { }
+    }, 150);
 }
 importBtn?.addEventListener('click', pickAndImport);
 ['dragenter', 'dragover'].forEach(ev => docList.addEventListener(ev, e => { e.preventDefault(); docList.classList.add('drag-over'); }));
@@ -1270,9 +1254,7 @@ function printDoc() {
    TOOLBAR STATE
    ========================================================= */
 function updateToolbarState() {
-    // Update sticky buttons from our own state
     updateStickyButtons();
-    // Update non-sticky alignment/list buttons from DOM query
     ['insertUnorderedList', 'insertOrderedList',
         'justifyLeft', 'justifyCenter', 'justifyRight', 'justifyFull'].forEach(cmd => {
             let active = false;
@@ -1479,7 +1461,6 @@ initColorPickers();
    ========================================================= */
 attachPointerHandler(document.getElementById('clear-format'), () => {
     runCmd('removeFormat');
-    // Also reset sticky formats
     ['bold', 'italic', 'underline', 'strikeThrough', 'superscript', 'subscript'].forEach(f => activeFormats[f] = false);
     updateStickyButtons();
     scheduleSave();
@@ -1668,9 +1649,13 @@ function blobToDataURL(blob) {
         r.readAsDataURL(blob);
     });
 }
-bindAction(document.getElementById('insert-image'), () => {
+
+// Shared image picker function — used by both the ribbon button
+// and the mobile bar to guarantee the picker opens in a real gesture.
+function openImagePicker() {
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = 'image/*';
+    input.type = 'file';
+    input.accept = 'image/*';
     input.onchange = async () => {
         const file = input.files[0]; if (!file) return;
         try {
@@ -1687,7 +1672,9 @@ bindAction(document.getElementById('insert-image'), () => {
         }
     };
     input.click();
-});
+}
+
+bindAction(document.getElementById('insert-image'), openImagePicker);
 bindAction(document.getElementById('insert-shape'), async () => {
     const shape = await promptModalOpen({ title: 'Insert Shape', message: 'Type: rect, circle, or triangle', value: 'rect' });
     if (!shape) return;
@@ -2033,8 +2020,6 @@ document.getElementById('compact-toggle')?.addEventListener('click', () => {
 
 /* =========================================================
    MOBILE BOTTOM BAR — pointer + touch + click safety net
-   Each button can only fire ONCE per tap, regardless of which
-   event type the browser dispatches first.
    ========================================================= */
 let lastMobileTapTime = 0;
 let lastMobileTapCmd = null;
@@ -2044,7 +2029,6 @@ function fireMobileBar(btn) {
     const cmd = btn.dataset.mb;
     if (!cmd) return;
 
-    // Debounce: ignore duplicate events from same tap within 300ms
     const now = Date.now();
     if (cmd === lastMobileTapCmd && now - lastMobileTapTime < 300) return;
     lastMobileTapTime = now;
@@ -2053,23 +2037,18 @@ function fireMobileBar(btn) {
     handleMobileBar(cmd, btn);
 }
 
-// Primary handler — pointerdown (Chrome, Edge, desktop, modern Safari)
 mobileBar?.addEventListener('pointerdown', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
-    // Do NOT preventDefault here — let the browser handle touch/click
-    // naturally so the button still gets its visual pressed state.
     fireMobileBar(btn);
 });
 
-// Fallback — touchstart for older iOS that doesn't fire pointerdown
 mobileBar?.addEventListener('touchstart', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
     fireMobileBar(btn);
 }, { passive: true });
 
-// Final safety net — click
 mobileBar?.addEventListener('click', e => {
     const btn = e.target.closest('.mb-btn');
     if (!btn) return;
@@ -2113,27 +2092,22 @@ function handleMobileBar(cmd, btn) {
         case 'alignRight': runCmd('justifyRight'); break;
         case 'alignJustify': runCmd('justifyFull'); break;
 
+        // Direct calls — no synthetic events for these (iOS blocks them)
+        case 'image': openImagePicker(); break;
         case 'link': {
-            const el = document.getElementById('insert-link');
-            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-            break;
-        }
-        case 'image': {
-            const el = document.getElementById('insert-image');
-            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            linkUrlInput.value = 'https://';
+            linkTextInput.value = window.getSelection().toString() || '';
+            linkModal.classList.remove('hidden');
+            setTimeout(() => linkUrlInput.focus(), 40);
             break;
         }
         case 'table': {
-            const el = document.getElementById('insert-table');
-            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+            tableModal.classList.remove('hidden');
+            setTimeout(() => tableRowsInput.focus(), 40);
             break;
         }
         case 'hr': runCmd('insertHorizontalRule'); break;
-        case 'date': {
-            const el = document.getElementById('insert-date');
-            if (el) el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-            break;
-        }
+        case 'date': runCmd('insertText', new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })); scheduleSave(); break;
 
         case 'find': openFind(false); break;
         case 'wordcount': showWordCount(); break;
@@ -2211,10 +2185,10 @@ function handleSheetAction(action) {
             el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
         };
         switch (action) {
-            case 'pagebreak': dispatch('insert-pagebreak'); break;
-            case 'pagenum': dispatch('insert-pagenum'); break;
+            case 'pagebreak': runCmd('insertHTML', '<hr class="page-break"><p><br></p>'); scheduleSave(); break;
+            case 'pagenum': runCmd('insertHTML', `<span class="page-number">Page&nbsp;<span class="page-num">1</span></span>&nbsp;`); scheduleSave(); break;
             case 'bookmark': dispatch('insert-bookmark'); break;
-            case 'datetime': dispatch('insert-datetime'); break;
+            case 'datetime': runCmd('insertText', new Date().toLocaleString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })); scheduleSave(); break;
             case 'toc': dispatch('insert-toc'); break;
             case 'footnote': dispatch('insert-footnote'); break;
             case 'quoteInsert': dispatch('insert-quote'); break;
@@ -2286,18 +2260,18 @@ const COMMANDS = [
     { name: 'Align Left', icon: '⬅', run: () => runCmd('justifyLeft') },
     { name: 'Align Center', icon: '↔', run: () => runCmd('justifyCenter') },
     { name: 'Align Right', icon: '➡', run: () => runCmd('justifyRight') },
-    { name: 'Insert Link', icon: '🔗', run: () => document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Image', icon: '🖼', run: () => document.getElementById('insert-image')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Table', icon: '▦', run: () => document.getElementById('insert-table')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Link', icon: '🔗', run: () => { linkUrlInput.value = 'https://'; linkTextInput.value = window.getSelection().toString() || ''; linkModal.classList.remove('hidden'); setTimeout(() => linkUrlInput.focus(), 40); } },
+    { name: 'Insert Image', icon: '🖼', run: openImagePicker },
+    { name: 'Insert Table', icon: '▦', run: () => { tableModal.classList.remove('hidden'); setTimeout(() => tableRowsInput.focus(), 40); } },
     { name: 'Insert Horizontal Rule', icon: '―', run: () => runCmd('insertHorizontalRule') },
-    { name: 'Insert Page Break', icon: '⎯', run: () => document.getElementById('insert-pagebreak')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Date', icon: '📅', run: () => document.getElementById('insert-date')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Date & Time', icon: '🕐', run: () => document.getElementById('insert-datetime')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Emoji', icon: '😀', run: () => document.getElementById('insert-emoji')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Bookmark', icon: '🔖', run: () => document.getElementById('insert-bookmark')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Table of Contents', icon: '☰', run: () => document.getElementById('insert-toc')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Footnote', icon: '⁽¹⁾', run: () => document.getElementById('insert-footnote')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
-    { name: 'Insert Checklist', icon: '☑', run: () => document.getElementById('insert-tasklist')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) },
+    { name: 'Insert Page Break', icon: '⎯', run: () => { runCmd('insertHTML', '<hr class="page-break"><p><br></p>'); scheduleSave(); } },
+    { name: 'Insert Date', icon: '📅', run: () => { runCmd('insertText', new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })); scheduleSave(); } },
+    { name: 'Insert Date & Time', icon: '🕐', run: () => { runCmd('insertText', new Date().toLocaleString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })); scheduleSave(); } },
+    { name: 'Insert Emoji', icon: '😀', run: () => dispatch('insert-emoji') },
+    { name: 'Insert Bookmark', icon: '🔖', run: () => dispatch('insert-bookmark') },
+    { name: 'Insert Table of Contents', icon: '☰', run: () => dispatch('insert-toc') },
+    { name: 'Insert Footnote', icon: '⁽¹⁾', run: () => dispatch('insert-footnote') },
+    { name: 'Insert Checklist', icon: '☑', run: () => dispatch('insert-tasklist') },
     { name: 'Find in document', icon: '🔍', run: () => openFind(false) },
     { name: 'Find & Replace', icon: '⇄', run: () => openFind(true) },
     { name: 'Word Count', icon: '#', run: showWordCount },
@@ -2383,6 +2357,13 @@ paletteOverlay.addEventListener('click', e => {
     if (e.target === paletteOverlay) closePalette();
 });
 
+/* Helper used by command palette to fire the ribbon buttons */
+function dispatch(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+}
+
 /* =========================================================
    GLOBAL KEYBOARD SHORTCUTS
    ========================================================= */
@@ -2410,7 +2391,7 @@ document.addEventListener('keydown', e => {
         case 'b': e.preventDefault(); e.stopPropagation(); toggleStickyFormat('bold'); return;
         case 'i': e.preventDefault(); e.stopPropagation(); toggleStickyFormat('italic'); return;
         case 'u': e.preventDefault(); e.stopPropagation(); toggleStickyFormat('underline'); return;
-        case 'k': e.preventDefault(); e.stopPropagation(); document.getElementById('insert-link')?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); return;
+        case 'k': e.preventDefault(); e.stopPropagation(); linkUrlInput.value = 'https://'; linkTextInput.value = window.getSelection().toString() || ''; linkModal.classList.remove('hidden'); setTimeout(() => linkUrlInput.focus(), 40); return;
         case 'p': e.preventDefault(); e.stopPropagation(); printDoc(); return;
         case 'f':
             e.preventDefault(); e.stopPropagation();
